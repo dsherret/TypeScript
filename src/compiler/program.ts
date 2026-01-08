@@ -3333,10 +3333,12 @@ export function createProgram(_rootNamesOrOptions: readonly string[] | CreatePro
                 // synthesize 'import "tslib"' declaration
                 imports = [createSyntheticImport(externalHelpersModuleNameText, file)];
             }
-            const jsxImport = getJSXRuntimeImport(getJSXImplicitImportBase(options, file), options);
-            if (jsxImport) {
-                // synthesize `import "base/jsx-runtime"` declaration
-                (imports ||= []).push(createSyntheticImport(jsxImport, file));
+            if (file.scriptKind === ScriptKind.JSX || file.scriptKind === ScriptKind.TSX) {
+                const jsxImport = getJSXRuntimeImport(getJSXImplicitImportBase(options, file), options);
+                if (jsxImport) {
+                    // synthesize `import "base/jsx-runtime"` declaration
+                    (imports ||= []).push(createSyntheticImport(jsxImport, file));
+                }
             }
         }
 
