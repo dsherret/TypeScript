@@ -4,10 +4,22 @@
 
 import getExePath from "#getExePath";
 import type { FileSystem } from "./fs.ts";
+import type { RpcChannel } from "./wasmChannel.ts";
 
 export interface ClientSocketOptions {
     /** Path to the Unix domain socket or Windows named pipe for API communication */
     pipe: string;
+}
+
+export interface ClientWasmOptions {
+    /** A pre-built request channel bound to an in-process WebAssembly reactor. */
+    channel: RpcChannel;
+    /** Virtual filesystem callbacks */
+    fs?: FileSystem;
+    /** Resolves a module specifier in place of the compiler. */
+    resolveModuleName?: ModuleNameResolver;
+    /** When true, collect per-request timing information. */
+    collectTiming?: boolean;
 }
 
 export interface ClientSpawnOptions {
@@ -17,6 +29,8 @@ export interface ClientSpawnOptions {
     cwd?: string;
     /** Virtual filesystem callbacks */
     fs?: FileSystem;
+    /** Resolves a module specifier in place of the compiler. */
+    resolveModuleName?: ModuleNameResolver;
     /** Allow trusted projects to execute configured external content mapper processes. */
     runExternalCode?: boolean;
     /**
@@ -29,10 +43,14 @@ export interface ClientSpawnOptions {
     collectTiming?: boolean;
 }
 
-export type ClientOptions = ClientSocketOptions | ClientSpawnOptions;
+export type ClientOptions = ClientSocketOptions | ClientSpawnOptions | ClientWasmOptions;
 
 export function isSpawnOptions(options: ClientOptions): options is ClientSpawnOptions {
-    return !("pipe" in options);
+    return !("pipe" in options) && !("channel" in options);
+}
+
+export function isWasmOptions(options: ClientOptions): options is ClientWasmOptions {
+    return "channel" in options;
 }
 
 export function resolveExePath(options: ClientSpawnOptions): string {
@@ -53,3 +71,26 @@ export interface LSPConnectionOptions extends ClientSocketOptions {
 
 export interface APIOptions extends ClientSpawnOptions {
 }
+
+/** A request to resolve one module specifier. */
+export interface ModuleNameResolutionRequest {
+    moduleName: string;
+    containingFile: string;
+    resolutionMode: number;
+}
+
+/** Where a module specifier resolves to. */
+export interface ResolvedModuleName {
+    resolvedFileName: string;
+    extension?: string;
+    isExternalLibraryImport?: boolean;
+    resolvedUsingTsExtension?: boolean;
+}
+
+export type ModuleNameResolver = (
+    request: ModuleNameResolutionRequest,
+) => ModuleNameResolution | undefined;
+
+export type ModuleNameResolution =
+    | { resolved: ResolvedModuleName | null; moduleName?: undefined; }
+    | { moduleName: string; resolved?: undefined; };

@@ -19,6 +19,7 @@ import {
     type ClientSpawnOptions,
     getAPIProcessArgs,
     isSpawnOptions,
+    isWasmOptions,
     resolveExePath,
 } from "../options.ts";
 import type {
@@ -58,7 +59,10 @@ export class Client {
     async connect(): Promise<void> {
         if (this.connected) return;
 
-        if (isSpawnOptions(this.options)) {
+        if (isWasmOptions(this.options)) {
+            throw new Error("The WebAssembly transport is only supported by the sync client");
+        }
+        else if (isSpawnOptions(this.options)) {
             await this.connectViaSpawn(this.options);
         }
         else {
