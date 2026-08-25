@@ -1,83 +1,56 @@
 # Porting the ts-morph fork onto microsoft/TypeScript main
 
 Branch `migrate-tsmain`, based on `microsoft/TypeScript` main (`e533f4c083`).
-The fork's 40-commit delta (from base `8d29e62f3`) is being re-applied onto the
-restructured, rearchitected upstream.
 
-## Path remap (done)
+## Status: builds, runs, and the deferred features are restored
 
-    internal/**                        -> tsc/internal/**
-    cmd/**                             -> tsc/cmd/**
-    _packages/native-preview/src/**    -> packages/typescript/src/**
-    _packages/native-preview/test/**   -> packages/typescript/test/**
+All three layers build on TypeScript main and the reactor runs in-process:
 
-Every Go import was rewritten `github.com/microsoft/typescript-go/internal`
--> `github.com/microsoft/TypeScript/tsc/internal`.
+    go build ./...                                 exit 0   (11/11 Go packages)
+    GOOS=wasip1 GOARCH=wasm ... -buildmode=c-shared  exit 0   (cmd/tsgo-wasm reactor)
+    tsc -b  (packages/typescript)                  exit 0   (JS API layer)
 
-## Go build status: 9 of 11 packages compile
+Five end-to-end smoke tests pass against the built reactor (`packages/typescript/smoke*.mjs`):
+core parse+check, LS rename+format, checker getAmbientModules, batched
+getExportedSymbolsOfFiles, and parse-without-snapshot.
 
-OK: ast, core, tsoptions, checker, encoder, module, printer, compiler, ls
-FAIL: project, api
+## Restored features (were deferred to reach the first build)
 
-### Reconciliations already done
-- encoder.go: restored `strconv` import (body applied, import hunk rejected).
-- tsoptions/parsedcommandline.go: dropped removed `extraFileExtensions` field from
-  `WithAdditionalRootFiles`.
-- checker/services.go: dropped `GetFullyQualifiedName` (now upstream in exports.go).
-- compiler/emitter.go: dropped `WriteByteOrderMark` (upstream adds the BOM to the text).
-- ls/rename.go: added `RenameOptions` type, threaded `options` through `ProvideRename`
-  and the `getRenameInfoForNode` callers.
-- ls/codeactions.go, languageservice.go: restored `lsutil` / `core` imports.
-- ls/format.go: `l.converters.FromLSPRange(file, r)` -> `lsconv.FromLSPRangeToOriginal(l.converters, file, r)`.
-- ls/jsdoc.go: `getDocumentationFromDeclaration` is a package func taking `noMappedLocation`.
-- project imports: added `core`/`module` to autoimport.go, compilerhost.go.
+- **LS edit exposures** — rename, formatDocument, formatDocumentRange, organizeImports,
+  getDefinition, getImplementations, getCodeFixes, getCombinedCodeFix, getAmbientModules.
+  Go: restored `session_ls.go`, adapted every call to upstream's rewritten `lsconv`
+  converter API (package functions `FromLSPPositionForSourceFile`, `ToLSPRange`/
+  `ToLSPPosition` 2-return, `toAPITextEdits` arity), re-wired constants/unmarshallers/
+  dispatch. JS: added the `Project` methods + proto types.
+- **Checker exposures** — getSymbolOfDeclaration, symbolToString, getAmbientModules.
+- **getExportedSymbolsOfFiles** (batched-exports perf) — Go handler + JS method. Also
+  fixed a real bug in `DocumentIdentifier.UnmarshalJSONFrom` that dropped `fileName` in
+  the object case.
+- **parseSourceFile** (parse-without-snapshot perf) — Go handler + JS method. The
+  `SourceFileCache#offer` cache-reuse micro-optimization is deferred (its fork hunk
+  rejected); the method parses and returns correctly without it.
 
-### Deferred: incremental roots (~770 lines)
-Reverted `compiler/{fileloader,program,filesparser,fileInclude,host}.go` and
-`processingDiagnostic.go`, `includeprocessor.go` to upstream; removed the
-`addrootfiles*`/`removerootfiles` tests. Upstream rewrote the file loader around
-content-mappers + an include-processor, so the feature (`removedRoots`,
-`processRootFileChanges`, `canRemoveRoots`, `Program.RootFileChangesFrom`,
-`Program.UpdateRootFiles`, program-extension path) must be re-implemented against the
-new architecture, not merged.
+JS note: `apiRequest`/`apiRequestBinary` are strongly typed via the generated
+`APIMethodInfo` registry. Methods not (yet) in that registry are called through a cast.
+Wiring them into `tools/gen-proto` would remove the casts.
 
-## The hard core (why project + api don't build)
+## The one remaining optimization: incremental roots
 
-These are one cohesive in-process layer that upstream's content-mapper rewrite cut
-across. They cannot be merged piecemeal:
+Currently **stubbed to a correct full-rebuild fallback** (`Program.RootFileChangesFrom` /
+`UpdateRootFiles` / `FilesChangedFrom` return "no incremental update", so callers rebuild
+the program). Functionality is correct; the optimization is not yet ported.
 
-1. **Parse cache design conflict.** Our `refcountcache.go` adds a `CachedValue`
-   interface (`HostCacheEntry`/`SetHostCacheEntry`) for value-based ref/deref. Upstream's
-   `parsecache.go` / `ContentMappedParseCache` holds `contentmapper.SourceFiles`, which
-   does not satisfy `CachedValue`. Reconcile the two cache designs (or drop the
-   value-based ref and use key-based `Deref`).
-2. **Incremental roots.** `project.go` calls `Program.RootFileChangesFrom` /
-   `UpdateRootFiles` (deferred above). Re-implement or stub to a full-rebuild fallback.
-3. **Module-resolution hook.** `SessionOptions.ResolveModuleName` and
-   `callbackresolver.go` — re-add the field and wire the hook.
-4. **Dirty-file tracking.** `Project.dirtyFilePath` and `dirtyFiles`.
-5. **API dispatch.** `api/session.go`, `proto.go`, `callbackfs.go` — re-apply our
-   method dispatch + `session_ls.go` exposures onto upstream's expanded generated
-   dispatch.
+Re-implementing it is a genuine ~755-line effort against a rewritten architecture:
+`processRootFileChanges` / `diffRootFiles` / `canUpdateRootFiles` / `replacementsFor`
+operate on `processedFiles`, which upstream rebuilt around content-mappers, a
+project-reference file mapper, and an include-processor. Porting means adding the fork's
+fields (`rootFilesEnd`, `libFileCount`, `filesByLowerCasePath`, a `removedRoots` set) to
+the new `processedFiles` and re-expressing the incremental extend/remove logic on top of
+the new file-loading flow. High-risk (program-state correctness), so it is left as a
+deliberate follow-up rather than rushed.
 
-## Not started
+## Also deferred (smaller)
 
-- **API JS layer (~18 files)** under `packages/typescript/src/api/**` and `src/ast/**`.
-  Upstream rebuilt the TS API as a code generator (`proto.generated.ts`,
-  `ast.generated.ts`, `node.generated.ts`, `encoder.generated.ts`) around a
-  `Project`/`Checker`/`LanguageService`/`Emitter` object model. Our additions
-  (WasmChannel, wasi.ts, sync client, sourceFileCache, node.infrastructure, wtf8,
-  ast/children, ast/comments) are hand-edits on the pre-generator shape and must be
-  re-expressed as generator inputs + object-model methods. Redundant now (drop):
-  `getSymbolsInScope`, `getFullyQualifiedName`, find-references, completions,
-  `Program.getTypeChecker` (-> `Project.checker`).
-- **Wasm reactor rebuild** (`tsc/cmd/tsgo-wasm` -> typescript.wasm).
-- **Verification**: the tsgo-wasm end-to-end scripts + differential harness.
-
-## Assessment
-
-The mechanical + straightforward-reconciliation work is done (9/11 Go packages). The
-remainder is deliberate feature re-engineering against a rebuilt upstream, not porting.
-Given both the in-process layer and the API surface must be re-expressed against the new
-architecture regardless, doing it as targeted upstream PRs (see the decision report) is
-the same work with a durable payoff.
+- `getSourceFileIdentity`, project-root naming (`getProjectRootFiles`,
+  `WithAdditionalRootFiles`) — needed only by the incremental-roots path.
+- `SourceFileCache#offer` cache reuse for `parseSourceFile`.
