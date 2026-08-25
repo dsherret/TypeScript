@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/microsoft/TypeScript/tsc/internal/ipc"
 	"context"
 	"fmt"
 
@@ -49,7 +50,7 @@ type resolvedModuleResponse struct {
 // newCallbackModuleResolver returns the resolver a session with the
 // resolveModuleName callback enabled hands to the compiler, or nil when the
 // client did not enable it.
-func newCallbackModuleResolver(ctx context.Context, conn Conn, enabled bool) func(string, string, core.ResolutionMode) (*module.HostModuleResolution, bool) {
+func newCallbackModuleResolver(ctx context.Context, conn ipc.Conn, enabled bool) func(string, string, core.ResolutionMode) (*module.HostModuleResolution, bool) {
 	if !enabled {
 		return nil
 	}

@@ -420,6 +420,7 @@ type UpdateSnapshotResponse struct {
 }
 
 var unmarshalers = map[Method]func([]byte) (any, error){
+	MethodGetSymbolOfDeclaration: unmarshallerFor[GetSymbolOfDeclarationParams],
 	MethodRelease:                      unmarshallerFor[ReleaseParams],
 	MethodInitialize:                   noParams,
 	MethodUpdateSnapshot:               unmarshallerFor[UpdateSnapshotParams],
@@ -1125,6 +1126,15 @@ type ReferencedSymbolEntry struct {
 	Definition NodeHandle      `json:"definition"`
 	Symbol     *SymbolResponse `json:"symbol,omitempty"`
 	References []NodeHandle    `json:"references" nonnil:"true"`
+	// WriteAccess[i] reports whether References[i] is a write. DisplayParts render
+	// the definition. Both are the fork's enrichment of the reference response.
+	WriteAccess  []bool         `json:"writeAccess,omitempty"`
+	DisplayParts []*DisplayPart `json:"displayParts,omitempty"`
+}
+
+type DisplayPart struct {
+	Text string `json:"text"`
+	Kind string `json:"kind"`
 }
 
 // GetSignatureUsagesParams are the parameters for the getSignatureUsages method.
@@ -1587,12 +1597,6 @@ type CheckerNodeParams struct {
 }
 
 // GetSymbolsInScopeParams are parameters for getSymbolsInScope.
-type GetSymbolsInScopeParams struct {
-	Snapshot SnapshotID `json:"snapshot"`
-	Project  ProjectID  `json:"project"`
-	Location NodeHandle `json:"location"`
-	Meaning  uint32     `json:"meaning"` // SymbolFlags for what kinds of symbol to include
-}
 
 // CheckerSymbolParams are parameters for checker methods that operate on a symbol.
 type CheckerSymbolParams struct {
@@ -1808,4 +1812,15 @@ func unmarshallerFor[T any](data []byte) (any, error) {
 
 func noParams(data []byte) (any, error) {
 	return nil, nil
+}
+
+// Method constants for the fork's language-service and checker exposures.
+const (
+	MethodGetSymbolOfDeclaration Method = "getSymbolOfDeclaration"
+)
+
+type GetSymbolOfDeclarationParams struct {
+	Snapshot    SnapshotID `json:"snapshot"`
+	Project     ProjectID  `json:"project"`
+	Declaration NodeHandle `json:"declaration"`
 }

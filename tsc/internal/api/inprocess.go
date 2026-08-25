@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/microsoft/TypeScript/tsc/internal/ipc"
 	"context"
 	"fmt"
 	"runtime/debug"
@@ -36,7 +37,7 @@ type InProcessServerOptions struct {
 	// Conn.Call. Empty means the base FS is used directly with no delegation.
 	Callbacks []string
 	// Conn receives filesystem callbacks. Required when Callbacks is non-empty.
-	Conn Conn
+	Conn ipc.Conn
 }
 
 // NewInProcessServer creates a new in-process API server. The provided context

@@ -73,6 +73,7 @@ type Project struct {
 	// together with the root file list: a file the program holds may leave it only by
 	// being dropped as a root in the same update, which is what says nothing else was
 	// relying on it. See Project.updateRootFilesInProgram.
+	dirtyFilePath   tspath.Path
 	dirtyFiles      []tspath.Path
 	deletedFiles    []tspath.Path
 	dirtyFilesKnown bool
@@ -596,7 +597,7 @@ func (p *Project) updateRootFilesInProgram(
 	}
 	for _, file := range newProgram.SourceFiles() {
 		if _, isNew := acquiredFiles[file]; !isNew {
-			p.host.builder.parseCache.RefValue(file)
+			p.host.builder.parseCache.Ref(NewParseCacheKey(file.ParseOptions(), file.Hash, file.ScriptKind))
 		}
 	}
 	for _, file := range newProgram.DuplicateSourceFiles() {

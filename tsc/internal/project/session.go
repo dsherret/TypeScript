@@ -19,6 +19,7 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/collections"
 	"github.com/microsoft/TypeScript/tsc/internal/contentmapper"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
+	"github.com/microsoft/TypeScript/tsc/internal/module"
 	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
 	"github.com/microsoft/TypeScript/tsc/internal/json"
 	"github.com/microsoft/TypeScript/tsc/internal/locale"
@@ -66,6 +67,10 @@ const watchRequestTimeout = time.Second
 // SessionOptions are the immutable initialization options for a session.
 // Snapshots may reference them as a pointer since they never change.
 type SessionOptions struct {
+	// AllowNonTsExtensions lets the host include files with non-TS extensions.
+	AllowNonTsExtensions bool
+	// ResolveModuleName lets the host resolve a module specifier itself. Nil when the host does not resolve.
+	ResolveModuleName func(moduleName string, containingFile string, resolutionMode core.ResolutionMode) (answer *module.HostModuleResolution, handled bool)
 	CurrentDirectory       string
 	DefaultLibraryPath     string
 	TypingsLocation        string
@@ -1841,7 +1846,7 @@ func (s *Session) logCacheStats(snapshot *Snapshot) {
 	var parseCacheSize int
 	var extendedConfigCount int
 	if s.logger.IsVerbose() {
-		s.parseCache.entries.Range(func(_ ParseCacheKey, _ *refCountCacheEntry[ParseCacheKey, *ast.SourceFile]) bool {
+		s.parseCache.entries.Range(func(_ ParseCacheKey, _ *refCountCacheEntry[*ast.SourceFile]) bool {
 			parseCacheSize++
 			return true
 		})

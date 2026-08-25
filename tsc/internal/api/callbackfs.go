@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/microsoft/TypeScript/tsc/internal/bundled"
 	"context"
 	"fmt"
 	"time"
