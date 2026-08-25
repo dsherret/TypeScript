@@ -816,6 +816,8 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetSymbolOfDeclaration(ctx, parsed.(*GetSymbolOfDeclarationParams))
 	case string(MethodGetExportedSymbolsOfFiles):
 		return s.handleGetExportedSymbolsOfFiles(ctx, parsed.(*GetExportedSymbolsOfFilesParams))
+	case string(MethodParseSourceFile):
+		return s.handleParseSourceFile(ctx, parsed.(*ParseSourceFileParams))
 	case string(MethodSymbolToString):
 		return s.handleSymbolToString(ctx, parsed.(*SymbolToStringParams))
 	case string(MethodGetConstantValue):
@@ -4212,4 +4214,39 @@ func (s *Session) handleGetExportedSymbolsOfFiles(ctx context.Context, params *G
 	}
 
 	return results, nil
+}
+
+func (s *Session) handleParseSourceFile(ctx context.Context, params *ParseSourceFileParams) (any, error) {
+	fileName := params.File.ToAbsoluteFileName(s.projectSession.GetCurrentDirectory())
+	path := s.toPath(fileName)
+	sourceFile := s.projectSession.ParseSourceFile(
+		ast.SourceFileParseOptions{
+			FileName:                       fileName,
+			Path:                           path,
+			ExternalModuleIndicatorOptions: s.externalModuleIndicatorOptionsFor(params, fileName, path),
+		},
+		params.Text,
+	)
+	return s.encodeSourceFileResponse(sourceFile)
+}
+func (s *Session) externalModuleIndicatorOptionsFor(params *ParseSourceFileParams, fileName string, path tspath.Path) ast.ExternalModuleIndicatorOptions {
+	if params.Snapshot == 0 {
+		return ast.ExternalModuleIndicatorOptions{}
+	}
+	sd, err := s.getSnapshotData(params.Snapshot)
+	if err != nil {
+		return ast.ExternalModuleIndicatorOptions{}
+	}
+	program, err := sd.getProgram(params.Project)
+	if err != nil {
+		return ast.ExternalModuleIndicatorOptions{}
+	}
+	if existing := program.GetSourceFileByPath(path); existing != nil {
+		return existing.ParseOptions().ExternalModuleIndicatorOptions
+	}
+	// the metadata is worked out rather than looked up: a file the program does not hold has
+	// none recorded, and taking the zero value for it says "no package scope" — which reads
+	// a file created under a `"type": "module"` scope as a script and so parses it with
+	// options the program would not have given it. See Program.SourceFileMetaDataFor.
+	return ast.GetExternalModuleIndicatorOptions(fileName, program.Options(), program.GetSourceFileMetaData(path))
 }

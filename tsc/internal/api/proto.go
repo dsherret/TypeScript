@@ -434,6 +434,7 @@ var unmarshalers = map[Method]func([]byte) (any, error){
 	MethodGetAmbientModules:   unmarshallerFor[GetIntrinsicTypeParams],
 	MethodGetSymbolOfDeclaration: unmarshallerFor[GetSymbolOfDeclarationParams],
 	MethodGetExportedSymbolsOfFiles: unmarshallerFor[GetExportedSymbolsOfFilesParams],
+	MethodParseSourceFile:           unmarshallerFor[ParseSourceFileParams],
 	MethodSymbolToString:         unmarshallerFor[SymbolToStringParams],
 	MethodRelease:                      unmarshallerFor[ReleaseParams],
 	MethodInitialize:                   noParams,
@@ -1832,6 +1833,7 @@ func noParams(data []byte) (any, error) {
 const (
 	MethodGetSymbolOfDeclaration Method = "getSymbolOfDeclaration"
 	MethodGetExportedSymbolsOfFiles Method = "getExportedSymbolsOfFiles"
+	MethodParseSourceFile           Method = "parseSourceFile"
 	MethodSymbolToString         Method = "symbolToString"
 )
 
@@ -1852,3 +1854,10 @@ const (
 	MethodGetCombinedCodeFix  Method = "getCombinedCodeFix"
 	MethodGetAmbientModules   Method = "getAmbientModules"
 )
+
+type ParseSourceFileParams struct {
+	File     DocumentIdentifier `json:"file"`
+	Text     string             `json:"text"`
+	Snapshot SnapshotID         `json:"snapshot,omitempty"`
+	Project  ProjectID          `json:"project,omitempty"`
+}

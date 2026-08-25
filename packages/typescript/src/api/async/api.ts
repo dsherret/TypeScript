@@ -224,6 +224,7 @@ export interface TranspileOutput {
 export class API<FromLSP extends boolean = false> implements FormatDiagnosticsHost {
     private client: Client;
     private sourceFileCache: SourceFileCache;
+    private parseDecoder = new Wtf8Decoder();
     private toPath: ((fileName: string) => Path) | undefined;
     private currentDirectory: string | undefined;
     private getCanonicalFileNameWorker: ((fileName: string) => string) | undefined;
@@ -321,6 +322,20 @@ export class API<FromLSP extends boolean = false> implements FormatDiagnosticsHo
     async transpileDeclarationFromFile(fileName: string, options: TranspileOptions = {}): Promise<TranspileOutput> {
         await this.ensureInitialized();
         return this.client.apiRequest("transpileDeclarationFromFile", { fileName, options });
+    }
+
+    async parseSourceFile(file: DocumentIdentifier, text: string, context?: { snapshot: number; project: Path; }): Promise<SourceFile> {
+        await this.ensureInitialized();
+        const binaryData = await (this.client.apiRequestBinary as (m: string, p: unknown) => Promise<Uint8Array | undefined>)("parseSourceFile", {
+            file,
+            text,
+            ...context != null ? { snapshot: context.snapshot, project: context.project } : {},
+        });
+        if (!binaryData) {
+            throw new Error(`Failed to parse source file: ${resolveFileName(file)}`);
+        }
+        const sourceFile = new RemoteSourceFile(binaryData, this.parseDecoder, this.client.getTimingCollector()) as unknown as SourceFile;
+        return sourceFile;
     }
 
     async updateSnapshot(params?: FromLSP extends true ? LSPUpdateSnapshotParams : UpdateSnapshotParams): Promise<Snapshot> {
