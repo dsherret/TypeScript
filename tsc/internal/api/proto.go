@@ -430,6 +430,7 @@ var unmarshalers = map[Method]func([]byte) (any, error){
 	MethodGetCombinedCodeFix:  unmarshallerFor[GetCombinedCodeFixParams],
 	MethodGetAmbientModules:   unmarshallerFor[GetIntrinsicTypeParams],
 	MethodGetSymbolOfDeclaration: unmarshallerFor[GetSymbolOfDeclarationParams],
+	MethodSymbolToString:         unmarshallerFor[SymbolToStringParams],
 	MethodRelease:                      unmarshallerFor[ReleaseParams],
 	MethodInitialize:                   noParams,
 	MethodUpdateSnapshot:               unmarshallerFor[UpdateSnapshotParams],
@@ -1826,6 +1827,7 @@ func noParams(data []byte) (any, error) {
 // Method constants for the fork's language-service and checker exposures.
 const (
 	MethodGetSymbolOfDeclaration Method = "getSymbolOfDeclaration"
+	MethodSymbolToString         Method = "symbolToString"
 )
 
 type GetSymbolOfDeclarationParams struct {

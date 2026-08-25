@@ -1486,6 +1486,32 @@ export class Checker {
         this.objectRegistry = objectRegistry;
     }
 
+    getSymbolOfDeclaration(node: Node): Symbol | undefined {
+        const data = (this.client.apiRequest as (m: string, p: unknown) => any)("getSymbolOfDeclaration", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            declaration: getNodeId(node),
+        });
+        return data ? this.objectRegistry.getOrCreateSymbol(data) : undefined;
+    }
+
+    symbolToString(symbol: Symbol, enclosingDeclaration?: Node): string {
+        return (this.client.apiRequest as (m: string, p: unknown) => any)("symbolToString", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            symbol: symbol.id,
+            location: enclosingDeclaration ? getNodeId(enclosingDeclaration) : undefined,
+        });
+    }
+
+    getAmbientModules(): readonly Symbol[] {
+        const data = (this.client.apiRequest as (m: string, p: unknown) => any)("getAmbientModules", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+        });
+        return data ? data.map((d: SymbolResponse) => this.objectRegistry.getOrCreateSymbol(d)) : [];
+    }
+
     dispose(): void {
         this.objectRegistry.clear();
     }

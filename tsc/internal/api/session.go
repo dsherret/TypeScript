@@ -812,6 +812,10 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetCombinedCodeFix(ctx, parsed.(*GetCombinedCodeFixParams))
 	case string(MethodGetAmbientModules):
 		return s.handleGetAmbientModules(ctx, parsed.(*GetIntrinsicTypeParams))
+	case string(MethodGetSymbolOfDeclaration):
+		return s.handleGetSymbolOfDeclaration(ctx, parsed.(*GetSymbolOfDeclarationParams))
+	case string(MethodSymbolToString):
+		return s.handleSymbolToString(ctx, parsed.(*SymbolToStringParams))
 	case string(MethodGetConstantValue):
 		return s.handleGetConstantValue(ctx, parsed.(*CheckerNodeParams))
 	case string(MethodGetSignatureFromDeclaration):

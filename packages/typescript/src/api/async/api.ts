@@ -1478,6 +1478,32 @@ export class Checker {
         this.objectRegistry = objectRegistry;
     }
 
+    async getSymbolOfDeclaration(node: Node): Promise<Symbol | undefined> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getSymbolOfDeclaration", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            declaration: getNodeId(node),
+        });
+        return data ? this.objectRegistry.getOrCreateSymbol(data) : undefined;
+    }
+
+    async symbolToString(symbol: Symbol, enclosingDeclaration?: Node): Promise<string> {
+        return (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("symbolToString", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            symbol: symbol.id,
+            location: enclosingDeclaration ? getNodeId(enclosingDeclaration) : undefined,
+        });
+    }
+
+    async getAmbientModules(): Promise<readonly Symbol[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getAmbientModules", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+        });
+        return data ? data.map((d: SymbolResponse) => this.objectRegistry.getOrCreateSymbol(d)) : [];
+    }
+
     dispose(): void {
         this.objectRegistry.clear();
     }
