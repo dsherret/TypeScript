@@ -1,3 +1,4 @@
+import type { RenameOptions } from "./types.ts";
 import { CheckFlags } from "#enums/checkFlags";
 import { CompletionItemKind } from "#enums/completionItemKind";
 import { DiagnosticCategory } from "#enums/diagnosticCategory";
@@ -76,6 +77,16 @@ import type {
     UpdateSnapshotParams,
     UpdateSnapshotResponse,
 } from "../proto.ts";
+import type {
+    FileTextEdits,
+    CodeFixAction,
+    CombinedCodeActions,
+    FileSpan,
+    FormattingOptions,
+    OrganizeImportsMode,
+    QuotePreference,
+} from "../proto.ts";
+
 import {
     resolveFileName,
     toUpdateSnapshotRequest,
@@ -863,6 +874,132 @@ export class Project {
     /** @deprecated Use `languageService.getImportEditsForSymbols`. */
     getImportEditsForSymbols(file: DocumentIdentifier, symbols: readonly Symbol[], options: GetImportEditsForSymbolsOptions = {}): Promise<readonly TextEdit[]> {
         return this.languageService.getImportEditsForSymbols(file, symbols, options);
+    }
+
+    /** Returns the edits that format an entire file. */
+    async formatDocument(file: DocumentIdentifier, options?: FormattingOptions): Promise<readonly TextEdit[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("formatDocument", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            ...(options !== undefined ? { options } : {}),
+        });
+        return data ?? [];
+    }
+
+    /** Returns the edits that format the `[pos, end)` span of a file. */
+    async formatDocumentRange(file: DocumentIdentifier, pos: number, end: number, options?: FormattingOptions): Promise<readonly TextEdit[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("formatDocumentRange", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            pos,
+            end,
+            ...(options !== undefined ? { options } : {}),
+        });
+        return data ?? [];
+    }
+
+    /**
+     * Returns the edits that sort, combine, and/or remove unused imports in a
+     * file. Defaults to all three; see {@link OrganizeImportsMode}.
+     */
+    async organizeImports(file: DocumentIdentifier, mode?: OrganizeImportsMode): Promise<readonly TextEdit[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("organizeImports", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            ...(mode !== undefined ? { mode } : {}),
+        });
+        return data ?? [];
+    }
+
+    /**
+     * Returns the edits that rename the symbol at `position`, grouped by file.
+     * An empty result means the element cannot be renamed.
+     *
+     * `useAliasesForRename` overrides the providePrefixAndSuffixTextForRename
+     * user preference: when false, a shorthand property assignment, binding
+     * element, or import/export specifier is renamed outright instead of being
+     * given the old name as an alias.
+     */
+    async rename(file: DocumentIdentifier, position: number, newName: string, options: RenameOptions = {}): Promise<readonly FileTextEdits[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("rename", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            position,
+            newName,
+            ...(options.useAliasesForRename !== undefined ? { useAliasesForRename: options.useAliasesForRename } : {}),
+        });
+        return data ?? [];
+    }
+
+    /** Returns the locations that define the symbol at `position`. */
+    async getDefinition(file: DocumentIdentifier, position: number): Promise<readonly FileSpan[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getDefinition", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            position,
+        });
+        return data ?? [];
+    }
+
+    /** Returns the locations that implement the symbol at `position`. */
+    async getImplementations(file: DocumentIdentifier, position: number): Promise<readonly FileSpan[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getImplementations", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            position,
+        });
+        return data ?? [];
+    }
+
+    /**
+     * Returns the quick fixes available for the `[pos, end)` span. When
+     * `errorCodes` is given, only fixes addressing those diagnostics are returned.
+     * `quotePreference` decides the quotes a fix writes a new string literal with.
+     */
+    async getCodeFixes(
+        file: DocumentIdentifier,
+        pos: number,
+        end: number,
+        errorCodes?: readonly number[],
+        quotePreference?: QuotePreference,
+    ): Promise<readonly CodeFixAction[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getCodeFixes", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            pos,
+            end,
+            ...(errorCodes !== undefined ? { errorCodes } : {}),
+            ...(quotePreference !== undefined ? { quotePreference } : {}),
+        });
+        return data ?? [];
+    }
+
+    /**
+     * Returns the edits that apply `fixId` everywhere it is needed in the file,
+     * i.e. the "fix all" form of a quick fix. Throws when no provider owns the
+     * fix id.
+     */
+    async getCombinedCodeFix(
+        file: DocumentIdentifier,
+        fixId: string,
+        options?: FormattingOptions,
+        quotePreference?: QuotePreference,
+    ): Promise<CombinedCodeActions> {
+        return await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getCombinedCodeFix", {
+            snapshot: this.snapshotId,
+            project: this.id,
+            file,
+            fixId,
+            ...(options !== undefined ? { options } : {}),
+            ...(quotePreference !== undefined ? { quotePreference } : {}),
+        });
     }
 
     dispose(): void {

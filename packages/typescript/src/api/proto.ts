@@ -1,3 +1,4 @@
+import type { TextEdit } from "./proto.generated.ts";
 import {
     documentURIToFileName,
     fileNameToDocumentURI,
@@ -94,3 +95,43 @@ export function toUpdateSnapshotRequest(params?: UpdateSnapshotParams): UpdateSn
         ...(mergedOpenProjects !== undefined ? { openProjects: mergedOpenProjects } : {}),
     };
 }
+
+
+/** Edits grouped by the file they apply to. */
+export interface FileTextEdits {
+    fileName: string;
+    edits: TextEdit[];
+}
+
+/** A quick fix: a description plus the edits that apply it. */
+export interface CodeFixAction {
+    description: string;
+    changes: FileTextEdits[];
+}
+
+/** The result of applying one fix id across a whole file. */
+export interface CombinedCodeActions {
+    description: string;
+    changes: FileTextEdits[];
+}
+
+/** A span of a file, in character offsets. */
+export interface FileSpan {
+    fileName: string;
+    pos: number;
+    end: number;
+}
+
+/** Formatter settings. Unset fields fall back to the server's defaults. */
+export interface FormattingOptions {
+    tabSize?: number;
+    insertSpaces?: boolean;
+    trimTrailingWhitespace?: boolean;
+    indentSize?: number;
+    indentStyle?: number;
+    newLineCharacter?: string;
+}
+
+export type OrganizeImportsMode = "all" | "sortAndCombine" | "removeUnused";
+
+export type QuotePreference = "auto" | "double" | "single";

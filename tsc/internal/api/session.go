@@ -794,6 +794,24 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetTypeArguments(ctx, parsed.(*CheckerTypeParams))
 	case string(MethodGetImportAdderEdits):
 		return s.handleGetImportAdderEdits(ctx, parsed.(*GetImportAdderEditsParams))
+	case string(MethodFormatDocument):
+		return s.handleFormatDocument(ctx, parsed.(*FormatDocumentParams))
+	case string(MethodFormatDocumentRange):
+		return s.handleFormatDocumentRange(ctx, parsed.(*FormatDocumentRangeParams))
+	case string(MethodOrganizeImports):
+		return s.handleOrganizeImports(ctx, parsed.(*OrganizeImportsParams))
+	case string(MethodRename):
+		return s.handleRename(ctx, parsed.(*RenameParams))
+	case string(MethodGetDefinition):
+		return s.handleGetDefinition(ctx, parsed.(*FilePositionParams))
+	case string(MethodGetImplementations):
+		return s.handleGetImplementations(ctx, parsed.(*FilePositionParams))
+	case string(MethodGetCodeFixes):
+		return s.handleGetCodeFixes(ctx, parsed.(*GetCodeFixesParams))
+	case string(MethodGetCombinedCodeFix):
+		return s.handleGetCombinedCodeFix(ctx, parsed.(*GetCombinedCodeFixParams))
+	case string(MethodGetAmbientModules):
+		return s.handleGetAmbientModules(ctx, parsed.(*GetIntrinsicTypeParams))
 	case string(MethodGetConstantValue):
 		return s.handleGetConstantValue(ctx, parsed.(*CheckerNodeParams))
 	case string(MethodGetSignatureFromDeclaration):

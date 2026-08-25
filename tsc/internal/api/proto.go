@@ -420,6 +420,15 @@ type UpdateSnapshotResponse struct {
 }
 
 var unmarshalers = map[Method]func([]byte) (any, error){
+	MethodFormatDocument:      unmarshallerFor[FormatDocumentParams],
+	MethodFormatDocumentRange: unmarshallerFor[FormatDocumentRangeParams],
+	MethodOrganizeImports:     unmarshallerFor[OrganizeImportsParams],
+	MethodRename:              unmarshallerFor[RenameParams],
+	MethodGetDefinition:       unmarshallerFor[FilePositionParams],
+	MethodGetImplementations:  unmarshallerFor[FilePositionParams],
+	MethodGetCodeFixes:        unmarshallerFor[GetCodeFixesParams],
+	MethodGetCombinedCodeFix:  unmarshallerFor[GetCombinedCodeFixParams],
+	MethodGetAmbientModules:   unmarshallerFor[GetIntrinsicTypeParams],
 	MethodGetSymbolOfDeclaration: unmarshallerFor[GetSymbolOfDeclarationParams],
 	MethodRelease:                      unmarshallerFor[ReleaseParams],
 	MethodInitialize:                   noParams,
@@ -1824,3 +1833,15 @@ type GetSymbolOfDeclarationParams struct {
 	Project     ProjectID  `json:"project"`
 	Declaration NodeHandle `json:"declaration"`
 }
+
+const (
+	MethodFormatDocument      Method = "formatDocument"
+	MethodFormatDocumentRange Method = "formatDocumentRange"
+	MethodOrganizeImports     Method = "organizeImports"
+	MethodRename              Method = "rename"
+	MethodGetDefinition       Method = "getDefinition"
+	MethodGetImplementations  Method = "getImplementations"
+	MethodGetCodeFixes        Method = "getCodeFixes"
+	MethodGetCombinedCodeFix  Method = "getCombinedCodeFix"
+	MethodGetAmbientModules   Method = "getAmbientModules"
+)
