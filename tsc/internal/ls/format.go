@@ -60,7 +60,7 @@ func (l *LanguageService) FormatDocumentRangeWithSettings(
 		return nil
 	}
 	_, file := l.getProgramAndFile(documentURI)
-	return l.toLSProtoTextEdits(file, l.getFormattingEditsForRange(ctx, file, options, l.converters.FromLSPRange(file, r)))
+	return l.toLSProtoTextEdits(file, l.getFormattingEditsForRange(ctx, file, options, lsconv.FromLSPRangeToOriginal(l.converters, file, r)))
 }
 
 func (l *LanguageService) ProvideFormatDocument(

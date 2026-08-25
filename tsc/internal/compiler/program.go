@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -79,26 +78,9 @@ type packageNamesInfo struct {
 	deepImportPackages *collections.Set[string]
 }
 
-// programID names a program without keeping it alive, so that a program built from
-// another can say which one without retaining every program before it.
-type programID uint64
-
-var nextProgramID atomic.Uint64
-
 type Program struct {
 	opts        ProgramOptions
 	checkerPool CheckerPool // always set; used as fallback for project system pools
-
-	// id names this program. derivedFrom names the program this one was built from by
-	// replacing the files at changedPaths and adding files that program did not hold,
-	// and removing the files at removedPaths, and is zero for a program built from
-	// scratch. See FilesChangedFrom.
-	id           programID
-	derivedFrom  programID
-	changedPaths []tspath.Path
-	// removedPaths are the paths the program this one was derived from holds a file at
-	// and this one does not. Only a root file leaving the program produces one.
-	removedPaths []tspath.Path
 
 	// compilerCheckerPool is set only when the built-in compiler checker pool is in use
 	// (i.e. CreateCheckerPool was not provided). It enables grouped parallel iteration,
@@ -111,7 +93,8 @@ type Program struct {
 
 	usesUriStyleNodeCoreModules core.Tristate
 
-	commonSourceDirectory lazyValue[string]
+	commonSourceDirectory     string
+	commonSourceDirectoryOnce sync.Once
 
 	declarationDiagnosticCache collections.SyncMap[*ast.SourceFile, []*ast.Diagnostic]
 
@@ -296,7 +279,7 @@ func (p *Program) GetSourceFileFromReference(origin *ast.SourceFile, ref *ast.Fi
 }
 
 func NewProgram(opts ProgramOptions) *Program {
-	p := &Program{opts: opts, id: newProgramID()}
+	p := &Program{opts: opts}
 	if p.opts.Tracing != nil {
 		defer p.opts.Tracing.Push(tracing.PhaseProgram, "createProgram", map[string]any{"configFilePath": opts.Config.CompilerOptions().ConfigFilePath}, true)()
 	}
@@ -427,251 +410,6 @@ func (p *Program) ReuseProgram(changedFilePath tspath.Path, newHost CompilerHost
 	}
 	updateFileIncludeProcessor(result)
 	return result, newFile, true
-}
-
-// UpdateRootFiles returns a program built from this one by dropping root files from
-// and appending root files to its root file list, optionally replacing files whose text
-// changed at the same time, and reports whether it was able to. A false return means the
-// caller has to build a program from scratch; the returned source files were acquired
-// from newHost before that was known and must be released, exactly as for UpdateProgram.
-//
-// The result is the program a build from scratch with newConfig would have produced.
-// What makes that possible for an addition is that a root appended to the end can only
-// reach files that are already in the program or are new, so nothing already there moves
-// and nothing already resolved resolves differently. Every way that could stop being
-// true - a lib file, a package installed twice, a file the program holds under another
-// casing, a project reference, a compiler option that differs - is a false return.
-//
-// A removal has no such guarantee, since a file leaving can change what other files
-// resolve to, so it is only made for roots the rest of the program never asked for and
-// that brought nothing into it but themselves. canRemoveRoots is the whole of that
-// argument.
-//
-// It is the caller's job to establish the one thing this cannot see: that no file
-// already in the program looked for one of the added files and failed to find it,
-// which a build from scratch would now resolve.
-//
-// The program it returns resolves from a resolver of its own, which starts empty
-// where a rebuilt program's has every resolution the build made. That only costs
-// later queries their cache, except for PackageJsonCacheEntries, which reports what
-// a program looked at and so reports less. Nothing on this path reads it.
-func (p *Program) UpdateRootFiles(
-	newConfig *tsoptions.ParsedCommandLine,
-	changedFilePaths []tspath.Path,
-	newHost CompilerHost,
-	createCheckerPool func(*Program) CheckerPool,
-) (*Program, []*ast.SourceFile, bool) {
-	if !p.canUpdateRootFiles(newConfig) {
-		return nil, nil, false
-	}
-	removed, addedRootFileNames, ok := p.diffRootFiles(newConfig)
-	if !ok {
-		return nil, nil, false
-	}
-
-	newOpts := p.opts
-	newOpts.Host = newHost
-	newOpts.Config = newConfig
-	if createCheckerPool != nil {
-		newOpts.CreateCheckerPool = createCheckerPool
-	}
-
-	var acquired []*ast.SourceFile
-	replacements, ok := p.replacementsFor(changedFilePaths, removed, newHost, &acquired)
-	if !ok {
-		return nil, acquired, false
-	}
-
-	processed, addedFiles, newFiles, ok := processRootFileChanges(
-		newOpts,
-		&p.processedFiles,
-		removed,
-		addedRootFileNames,
-		p.SingleThreaded(),
-	)
-	acquired = append(acquired, addedFiles...)
-	if !ok {
-		return nil, acquired, false
-	}
-
-	result := &Program{
-		opts:                        newOpts,
-		id:                          newProgramID(),
-		derivedFrom:                 p.id,
-		comparePathsOptions:         p.comparePathsOptions,
-		processedFiles:              processed,
-		usesUriStyleNodeCoreModules: p.usesUriStyleNodeCoreModules,
-	}
-	// both of these are freshly built by processRootFileChanges, so the program being
-	// derived from keeps the files it had
-	for path, file := range replacements {
-		result.filesByPath[path] = file
-		// the host answers with the file it already holds when the text did not change,
-		// and the added roots only ever bring files in, so these and the removed roots
-		// are the whole difference between the two programs
-		if p.filesByPath[path] != file {
-			result.changedPaths = append(result.changedPaths, path)
-		}
-	}
-	if len(replacements) > 0 {
-		for i, file := range result.files {
-			if replacement, ok := replacements[file.Path()]; ok {
-				result.files[i] = replacement
-			}
-		}
-	}
-	if !removed.isEmpty() {
-		result.removedPaths = slices.Collect(maps.Keys(removed.paths.Keys()))
-	}
-	result.initCheckerPool()
-	result.reuseCommonSourceDirectory(p, newFiles, removed)
-	result.verifyCompilerOptions()
-	return result, acquired, true
-}
-
-// FilesChangedFrom reports every path at which this program holds a different source
-// file than base does, every path base holds a file this program does not, and whether
-// it could say. It answers only for the program this one was built from directly - by
-// UpdateProgram or UpdateRootFiles - and a false return leaves the caller to compare
-// the two file sets itself.
-//
-// A true return also says that every file this program holds that base does not is new
-// rather than changed, since neither of those ways of building a program moves a file
-// from one path to another.
-func (p *Program) FilesChangedFrom(base *Program) (changed []tspath.Path, removed []tspath.Path, ok bool) {
-	if p == nil || base == nil || p.derivedFrom == 0 || p.derivedFrom != base.id {
-		return nil, nil, false
-	}
-	return p.changedPaths, p.removedPaths, true
-}
-
-// RootFileChangesFrom reads newConfig's root file list as this program's with names
-// dropped from it and names appended to the end, and reports which. A false return means
-// there is no such reading worth having, and the caller has to build the program.
-//
-// It is what a caller asks before UpdateRootFiles, to check the things about a root
-// arriving or leaving that only it can know.
-func (p *Program) RootFileChangesFrom(newConfig *tsoptions.ParsedCommandLine) (added []string, removed []string, ok bool) {
-	if !p.canUpdateRootFiles(newConfig) {
-		return nil, nil, false
-	}
-	removedRoots, added, ok := p.diffRootFiles(newConfig)
-	if !ok {
-		return nil, nil, false
-	}
-	return added, slices.Collect(maps.Keys(removedRoots.names.Keys())), true
-}
-
-func newProgramID() programID {
-	return programID(nextProgramID.Add(1))
-}
-
-// canUpdateRootFiles reports whether newConfig differs from this program's config in
-// nothing but its root file list. Everything else about a config decides how the whole
-// program is built, so a difference anywhere else means the program has to be built
-// again rather than derived from this one.
-func (p *Program) canUpdateRootFiles(newConfig *tsoptions.ParsedCommandLine) bool {
-	if !p.finishedProcessing || p.opts.Tracing != nil {
-		return false
-	}
-	oldConfig := p.opts.Config
-	if len(oldConfig.ProjectReferences()) > 0 || len(newConfig.ProjectReferences()) > 0 {
-		return false
-	}
-	if len(p.redirectFilesByPath) > 0 || len(p.redirectTargetsMap) > 0 {
-		return false
-	}
-	// the first build is where the lib files and the automatic type directives are
-	// worked out, so there has to have been one, and there has to go on being one: a
-	// program with no root files at all holds neither
-	if len(oldConfig.FileNames()) == 0 || len(newConfig.FileNames()) == 0 {
-		return false
-	}
-	return reflect.DeepEqual(oldConfig.CompilerOptions(), newConfig.CompilerOptions())
-}
-
-// maxRemovedRootsTracked bounds how many roots one update may drop incrementally. Each
-// one is a search through the include reasons of everything that stays, and past a
-// handful of them building the program again is the cheaper way to take them away.
-const maxRemovedRootsTracked = 8
-
-// diffRootFiles reads newConfig's root file list as this program's with names dropped
-// from it and names appended to the end, and reports which. That is the only shape a
-// program can be derived in: an addition is sound only at the end of the list, and what
-// a removal costs is bounded by how much of the program asked for the files going.
-//
-// The decomposition always exists - every old name could be called dropped and every new
-// one appended - so this refuses only when there is too much of it to be worth doing, or
-// when there is nothing to do.
-func (p *Program) diffRootFiles(newConfig *tsoptions.ParsedCommandLine) (*removedRoots, []string, bool) {
-	oldRootFileNames := p.opts.Config.FileNames()
-	newRootFileNames := newConfig.FileNames()
-	var removed removedRoots
-	kept := 0
-	for _, name := range oldRootFileNames {
-		if kept < len(newRootFileNames) && newRootFileNames[kept] == name {
-			kept++
-			continue
-		}
-		if removed.names.Len() == maxRemovedRootsTracked {
-			return nil, nil, false
-		}
-		removed.names.Add(name)
-		removed.paths.Add(p.toPath(name))
-	}
-	added := newRootFileNames[kept:]
-	if removed.names.Len() == 0 && len(added) == 0 {
-		return nil, nil, false
-	}
-	for _, name := range newRootFileNames {
-		// a name the new list still holds is not leaving, whatever the reading above
-		// made of it: the old list named it twice and one of the two went, which
-		// changes how many reasons its file has to be in the program and nothing else
-		if removed.names.Has(name) {
-			return nil, nil, false
-		}
-	}
-	return &removed, added, true
-}
-
-// replacementsFor acquires the new text of each file whose contents changed, and
-// reports whether every one of them can stand in for the file it replaces without
-// changing anything else about the program. Whatever it acquired is appended to
-// acquired whether or not it succeeds, since the caller owns those either way.
-//
-// A file that is both changed and leaving is only leaving: what is on the file system
-// where it was is no longer the program's business.
-func (p *Program) replacementsFor(
-	changedFilePaths []tspath.Path,
-	removed *removedRoots,
-	newHost CompilerHost,
-	acquired *[]*ast.SourceFile,
-) (map[tspath.Path]*ast.SourceFile, bool) {
-	if len(changedFilePaths) == 0 {
-		return nil, true
-	}
-	replacements := make(map[tspath.Path]*ast.SourceFile, len(changedFilePaths))
-	for _, path := range changedFilePaths {
-		if removed.hasPath(path) {
-			continue
-		}
-		oldFile := p.filesByPath[path]
-		if oldFile == nil {
-			return nil, false
-		}
-		newFile := newHost.GetSourceFile(oldFile.ParseOptions())
-		if newFile != nil {
-			*acquired = append(*acquired, newFile)
-		}
-		if !canReplaceFileInProgram(oldFile, newFile) {
-			return nil, false
-		}
-		if oldNeedsImportHelpers := p.importHelpersImportSpecifiers[path] != nil; oldNeedsImportHelpers != p.needsImportHelpersImportSpecifier(newFile) {
-			return nil, false
-		}
-		replacements[path] = newFile
-	}
-	return replacements, true
 }
 
 func (p *Program) initCheckerPool() {
@@ -1313,7 +1051,7 @@ func (p *Program) verifyCompilerOptions() {
 
 		for _, file := range p.files {
 			if sourceFileMayBeEmitted(file, p, false, false) && !rootPaths.Has(file.Path()) {
-				p.includeProcessor.addOptionsDiagnostic(&processingDiagnostic{
+				p.includeProcessor.addProcessingDiagnostic(&processingDiagnostic{
 					kind: processingDiagnosticKindExplainingFileInclude,
 					data: &includeExplainingDiagnostic{
 						file:    file.Path(),
@@ -1948,22 +1686,6 @@ func (p *Program) GetSourceFileMetaData(path tspath.Path) ast.SourceFileMetaData
 	return p.sourceFileMetaDatas[path]
 }
 
-// SourceFileMetaDataFor is the metadata the program would parse fileName with, worked out
-// rather than looked up.
-//
-// GetSourceFileMetaData reads the map the program filled in as it loaded, so a path the
-// program does not hold reads as the zero value — and the zero value is a real answer, "no
-// package scope, so CommonJS", not a missing one. A caller asking about a file that is
-// about to join the program would take it for the answer and be wrong under a `"type":
-// "module"` scope. This asks the program's own resolver, which is what the file loader does
-// when the file does arrive.
-func (p *Program) SourceFileMetaDataFor(fileName string) ast.SourceFileMetaData {
-	if metaData, ok := p.sourceFileMetaDatas[tspath.ToPath(fileName, p.comparePathsOptions.CurrentDirectory, p.comparePathsOptions.UseCaseSensitiveFileNames)]; ok {
-		return metaData
-	}
-	return sourceFileMetaData(fileName, p.resolver, p.Options())
-}
-
 func (p *Program) GetEmitModuleFormatOfFile(sourceFile ast.HasFileName) core.ModuleKind {
 	return ast.GetEmitModuleFormatOfFileWorker(sourceFile.FileName(), p.projectReferenceFileMapper.getCompilerOptionsForFile(sourceFile), p.GetSourceFileMetaData(sourceFile.Path()))
 }
@@ -2004,58 +1726,21 @@ func (p *Program) GetDefaultLibFile(path tspath.Path) *LibFile {
 }
 
 func (p *Program) CommonSourceDirectory() string {
-	return *p.commonSourceDirectory.getValue(func() *string {
+	p.commonSourceDirectoryOnce.Do(func() {
 		files := func() []string {
-			return p.emittableFileNames(p.files)
+			return core.MapFiltered(p.files, func(file *ast.SourceFile) (string, bool) {
+				return file.FileName(), sourceFileMayBeEmitted(file, p, false /*forceDtsEmit*/, false /*forceJsEmit*/) && !file.IsDeclarationFile
+			})
 		}
-		value := outputpaths.GetCommonSourceDirectory(
+		p.commonSourceDirectory = outputpaths.GetCommonSourceDirectory(
 			p.Options(),
 			files,
 			p.GetCurrentDirectory(),
 			p.UseCaseSensitiveFileNames(),
 			p.checkSourceFilesBelongToPath,
 		)
-		return &value
 	})
-}
-
-func (p *Program) emittableFileNames(files []*ast.SourceFile) []string {
-	return core.MapFiltered(files, func(file *ast.SourceFile) (string, bool) {
-		return file.FileName(), sourceFileMayBeEmitted(file, p, false /*forceDtsEmit*/, false /*forceJsEmit*/) && !file.IsDeclarationFile
-	})
-}
-
-// reuseCommonSourceDirectory carries the common source directory over to a program
-// built by changing base's root files, and reports whether it could. It cannot when
-// the directory is the one the files have in common, since a file arriving or leaving
-// anywhere else moves it and with it every path the program would emit to. With a
-// rootDir or a config file the directory is named rather than derived, so all that is
-// left is to say which of the added files fall outside it.
-//
-// A file leaving also takes with it whatever was said about where it sat, and the
-// diagnostics carried here are the parse's rather than this program's, so a removal
-// with any of them gives the whole thing up and lets them be worked out again.
-func (p *Program) reuseCommonSourceDirectory(base *Program, addedFiles []*ast.SourceFile, removed *removedRoots) bool {
-	options := p.Options()
-	var rootDirectory string
-	switch {
-	case options.RootDir != "":
-		rootDirectory = options.RootDir
-	case options.ConfigFilePath != "":
-		rootDirectory = tspath.GetDirectoryPath(options.ConfigFilePath)
-	default:
-		return false
-	}
-	if !base.commonSourceDirectory.initialized.Load() {
-		return false
-	}
-	if !removed.isEmpty() && len(base.includeProcessor.rootDirDiagnostics) > 0 {
-		return false
-	}
-	p.commonSourceDirectory.tryReuse(&base.commonSourceDirectory)
-	p.includeProcessor.rootDirDiagnostics = slices.Clip(base.includeProcessor.rootDirDiagnostics)
-	p.checkSourceFilesBelongToPath(p.emittableFileNames(addedFiles), rootDirectory)
-	return true
+	return p.commonSourceDirectory
 }
 
 func (p *Program) checkSourceFilesBelongToPath(sourceFiles []string, rootDirectory string) bool {
@@ -2063,7 +1748,7 @@ func (p *Program) checkSourceFilesBelongToPath(sourceFiles []string, rootDirecto
 	for _, file := range sourceFiles {
 		absoluteSourceFilePath := tspath.GetCanonicalFileName(tspath.GetNormalizedAbsolutePath(file, p.GetCurrentDirectory()), p.UseCaseSensitiveFileNames())
 		if !tspath.ContainsPath(rootDirectory, file, p.comparePathsOptions) {
-			p.includeProcessor.addRootDirDiagnostic(&processingDiagnostic{
+			p.includeProcessor.addProcessingDiagnostic(&processingDiagnostic{
 				kind: processingDiagnosticKindExplainingFileInclude,
 				data: &includeExplainingDiagnostic{
 					file:    tspath.Path(absoluteSourceFilePath),
@@ -2084,9 +1769,6 @@ type WriteFileData struct {
 	Diagnostics     []*ast.Diagnostic
 	SkippedDtsWrite bool
 	SourceFile      *ast.SourceFile
-	// WriteByteOrderMark reports that the text handed to WriteFile starts with a
-	// UTF-8 byte order mark, which emitBOM asked for.
-	WriteByteOrderMark bool
 }
 
 type WriteFile func(fileName string, text string, data *WriteFileData) error

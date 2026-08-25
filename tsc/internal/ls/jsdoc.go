@@ -87,7 +87,7 @@ func (l *LanguageService) GetSignatureDocumentationComment(c *checker.Checker, d
 	if declaration == nil {
 		return ""
 	}
-	return l.getDocumentationFromDeclaration(c, nil /*symbol*/, declaration, nil /*location*/, lsproto.MarkupKindPlainText, true /*commentOnly*/)
+	return getDocumentationFromDeclaration(noMappedLocation, c, nil /*symbol*/, declaration, nil /*location*/, lsproto.MarkupKindPlainText, true /*commentOnly*/)
 }
 
 // GetSignatureJSDocTags collects the JSDoc tags on a signature's declaration, rendering each

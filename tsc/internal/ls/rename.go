@@ -62,7 +62,21 @@ func deduplicateRenameEdits(mappedEdits []mappedRenameEdit) (map[lsproto.Documen
 	return changes, true
 }
 
-func (l *LanguageService) ProvideRename(ctx context.Context, params *lsproto.RenameParams, orchestrator CrossProjectOrchestrator) (lsproto.WorkspaceEditOrNull, error) {
+// RenameOptions distinguishes rename's two consumers, which want different
+// answers for the same symbol.
+type RenameOptions struct {
+	// ApplyEditorEligibilityChecks refuses a rename that an editor has no business
+	// offering, because the user cannot meaningfully accept it: symbols owned by the
+	// standard library or by a package under node_modules. Strada scopes these checks
+	// to `getRenameInfo`, which only `prepareRename` consults; `findRenameLocations`
+	// applies none of them, so a programmatic caller that owns every file in its
+	// program - the API's model - can rename across those boundaries. An LSP client
+	// may issue a rename without a prepareRename first, so the server asks for the
+	// checks here as well.
+	ApplyEditorEligibilityChecks bool
+}
+
+func (l *LanguageService) ProvideRename(ctx context.Context, params *lsproto.RenameParams, orchestrator CrossProjectOrchestrator, options RenameOptions) (lsproto.WorkspaceEditOrNull, error) {
 	return handleCrossProject(
 		l,
 		ctx,
@@ -72,7 +86,7 @@ func (l *LanguageService) ProvideRename(ctx context.Context, params *lsproto.Ren
 		combineRenameResponse,
 		true,  /*isRename*/
 		false, /*implementations*/
-		symbolEntryTransformOptions{},
+		symbolEntryTransformOptions{rename: options},
 		nil, /*defaultProjectData*/
 	)
 }
@@ -88,7 +102,7 @@ func (l *LanguageService) GetRenameInfo(ctx context.Context, newName string, doc
 		node := astnav.GetTouchingPropertyName(sourceFile, int(mapped.Position))
 		node = getAdjustedLocation(node, true /*forRename*/, sourceFile)
 		if nodeIsEligibleForRename(node) {
-			if renameInfo, ok := l.getRenameInfoForNode(ctx, newName, node, sourceFile, program); ok {
+			if renameInfo, ok := l.getRenameInfoForNode(ctx, newName, node, sourceFile, program, RenameOptions{ApplyEditorEligibilityChecks: true}); ok {
 				return renameInfo
 			}
 		}

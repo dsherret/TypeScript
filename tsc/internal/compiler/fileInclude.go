@@ -79,12 +79,8 @@ type automaticTypeDirectiveFileData struct {
 	packageId     module.PackageId
 }
 
-// asRootFileName is the name the config's file list gave the root, taken from the
-// list rather than pointing into it. An index would be cheaper to carry, but it stops
-// meaning what it meant as soon as a root before it is dropped, and a program that
-// drops one is not otherwise rebuilt — see Program.UpdateRootFiles.
-func (r *FileIncludeReason) asRootFileName() string {
-	return r.data.(string)
+func (r *FileIncludeReason) asIndex() int {
+	return r.data.(int)
 }
 
 func (r *FileIncludeReason) asLibFileIndex() (int, bool) {
@@ -179,7 +175,7 @@ func (r *FileIncludeReason) computeDiagnostic(program *Program, toFileName func(
 	case fileIncludeKindRootFile:
 		if program.opts.Config.ConfigFile != nil {
 			config := program.opts.Config
-			fileName := tspath.GetNormalizedAbsolutePath(r.asRootFileName(), program.GetCurrentDirectory())
+			fileName := tspath.GetNormalizedAbsolutePath(config.FileNames()[r.asIndex()], program.GetCurrentDirectory())
 			if matchedFileSpec := config.GetMatchedFileSpec(fileName); matchedFileSpec != "" {
 				return ast.NewCompilerDiagnostic(diagnostics.Part_of_files_list_in_tsconfig_json, matchedFileSpec, toFileName(fileName))
 			} else if matchedIncludeSpec, isDefaultIncludeSpec := config.GetMatchedIncludeSpec(fileName); matchedIncludeSpec != "" {
@@ -274,7 +270,7 @@ func (r *FileIncludeReason) toRelatedInfo(program *Program) *ast.Diagnostic {
 	config := program.opts.Config
 	switch r.kind {
 	case fileIncludeKindRootFile:
-		fileName := tspath.GetNormalizedAbsolutePath(r.asRootFileName(), program.GetCurrentDirectory())
+		fileName := tspath.GetNormalizedAbsolutePath(config.FileNames()[r.asIndex()], program.GetCurrentDirectory())
 		if matchedFileSpec := config.GetMatchedFileSpec(fileName); matchedFileSpec != "" {
 			if filesNode := tsoptions.GetTsConfigPropArrayElementValue(config.ConfigFile.SourceFile, "files", matchedFileSpec); filesNode != nil {
 				return tsoptions.CreateDiagnosticForNodeInSourceFile(config.ConfigFile.SourceFile, filesNode.AsNode(), diagnostics.File_is_matched_by_files_list_specified_here)

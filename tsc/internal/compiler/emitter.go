@@ -376,10 +376,9 @@ func (e *emitter) printSourceFile(jsFilePath string, sourceMapFilePath string, s
 		text = stringutil.AddUTF8ByteOrderMark(text)
 	}
 	data := &WriteFileData{
-		SourceMapUrlPos:    sourceMapUrlPos,
-		Diagnostics:        e.emitterDiagnostics.GetDiagnostics(),
-		SourceFile:         e.sourceFile,
-		WriteByteOrderMark: options.EmitBOM.IsTrue(),
+		SourceMapUrlPos: sourceMapUrlPos,
+		Diagnostics:     e.emitterDiagnostics.GetDiagnostics(),
+		SourceFile:      e.sourceFile,
 	}
 	err := e.writeText(jsFilePath, text, data)
 	skippedDtsWrite := data.SkippedDtsWrite

@@ -15,16 +15,6 @@ import (
 type includeProcessor struct {
 	fileIncludeReasons    map[tspath.Path][]*FileIncludeReason
 	processingDiagnostics []*processingDiagnostic
-	// rootDirDiagnostics are the ones working out the common source directory
-	// produces, which happens after the parse and over whatever files the program
-	// holds by then. They are kept apart from the parse's own so that a program
-	// built from this one's files can carry the parse's and recompute these.
-	rootDirDiagnostics []*processingDiagnostic
-	// optionsDiagnostics are the ones verifying the compiler options produces, which
-	// also happens after the parse and over whatever files the program holds. Every
-	// program verifies its own options, so a program built from this one's files
-	// leaves these behind rather than carrying them and reporting them twice.
-	optionsDiagnostics []*processingDiagnostic
 
 	reasonToReferenceLocation  collections.SyncMap[*FileIncludeReason, *referenceFileLocation]
 	includeReasonToRelatedInfo collections.SyncMap[*FileIncludeReason, *ast.Diagnostic]
@@ -48,12 +38,6 @@ func (i *includeProcessor) getDiagnostics(p *Program) *ast.DiagnosticsCollection
 		for _, d := range i.processingDiagnostics {
 			i.computedDiagnostics.Add(d.toDiagnostic(p))
 		}
-		for _, d := range i.rootDirDiagnostics {
-			i.computedDiagnostics.Add(d.toDiagnostic(p))
-		}
-		for _, d := range i.optionsDiagnostics {
-			i.computedDiagnostics.Add(d.toDiagnostic(p))
-		}
 		for _, resolutions := range p.resolvedModules {
 			for _, resolvedModule := range resolutions {
 				for _, diag := range resolvedModule.ResolutionDiagnostics {
@@ -74,14 +58,6 @@ func (i *includeProcessor) getDiagnostics(p *Program) *ast.DiagnosticsCollection
 
 func (i *includeProcessor) addProcessingDiagnostic(d ...*processingDiagnostic) {
 	i.processingDiagnostics = append(i.processingDiagnostics, d...)
-}
-
-func (i *includeProcessor) addRootDirDiagnostic(d *processingDiagnostic) {
-	i.rootDirDiagnostics = append(i.rootDirDiagnostics, d)
-}
-
-func (i *includeProcessor) addOptionsDiagnostic(d *processingDiagnostic) {
-	i.optionsDiagnostics = append(i.optionsDiagnostics, d)
 }
 
 func (i *includeProcessor) addProcessingDiagnosticsForFileCasing(file tspath.Path, existingCasing string, currentCasing string, reason *FileIncludeReason) {

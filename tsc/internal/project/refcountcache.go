@@ -6,9 +6,30 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/collections"
 )
 
-type refCountCacheEntry[V any] struct {
-	mu       sync.Mutex
-	value    V
+// CachedValue is a value a RefCountCache can hand its own entry to.
+//
+// That is what lets a caller holding the value take or release a reference on it
+// without the identity it was filed under: an identity is a struct of file names,
+// where an entry is one pointer, and a program takes a reference on every file it
+// holds and releases one on every file it held, once each per snapshot. See
+// RefValue.
+type CachedValue interface {
+	comparable
+	HostCacheEntry() any
+	SetHostCacheEntry(entry any)
+}
+
+type refCountCacheEntry[K comparable, V any] struct {
+	mu    sync.Mutex
+	value V
+	// key is what the entry is filed under, kept so that a caller reaching the entry
+	// through its value never has to rebuild it — see RefValue.
+	key K
+	// owner is the cache the entry belongs to. A value carries its entry, and two
+	// caches of the same shape would both recognize the other's entries as their own,
+	// so reaching an entry through a value has to check whose it is — where reaching
+	// one through a key could not get that wrong.
+	owner    any
 	refCount int
 }
 
@@ -60,29 +81,6 @@ func (c *RefCountCache[K, V, AcquireArgs]) Acquire(identity K, acquireArgs Acqui
 func (c *RefCountCache[K, V, AcquireArgs]) Has(identity K) bool {
 	_, ok := c.entries.Load(identity)
 	return ok
-}
-
-// AcquireOrError retrieves an existing entry (incrementing its refcount) or produces a new one via
-// produce. If produce returns an error, no entry is stored and the error is returned, so callers can
-// cache only successful results. produce runs while holding the new entry's lock, so concurrent
-// acquisitions of the same identity that miss serialize on it.
-//
-// The caller is responsible for calling Deref when a value is returned without error.
-func (c *RefCountCache[K, V, AcquireArgs]) AcquireOrError(identity K, produce func() (V, error)) (V, error) {
-	entry, loaded := c.loadOrStoreNewLockedEntry(identity)
-	defer entry.mu.Unlock()
-	if loaded {
-		return entry.value, nil
-	}
-	value, err := produce()
-	if err != nil {
-		// Undo the speculative entry so failures are not cached.
-		entry.refCount = 0
-		c.entries.Delete(identity)
-		return value, err
-	}
-	entry.value = value
-	return value, nil
 }
 
 // Ref increments the reference count for an existing entry.

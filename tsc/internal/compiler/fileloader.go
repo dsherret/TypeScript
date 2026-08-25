@@ -56,30 +56,6 @@ type fileLoader struct {
 	filesParser *filesParser
 	rootTasks   []*parseTask
 
-	// base is the program being added to, and is nil for a build from scratch. When
-	// it is set the walk stops at every file the base already holds, and gives up
-	// when it meets something the base cannot simply be extended with.
-	base *processedFiles
-	// baseFilesAfterRoots are the files base holds past the ones its root files
-	// brought in, which is what an automatic type directive brought in. A rebuild
-	// would place any of them an added root reaches among that root's own files
-	// instead, so the walk gives up rather than leave one where it is.
-	baseFilesAfterRoots collections.Set[tspath.Path]
-	// removed names the root files the result is being built without, and is empty
-	// for an addition that takes nothing away.
-	removed *removedRoots
-	// fileIncludeReasonsWithoutRemoved is base's include reasons with the removed
-	// files' own entries dropped and the reasons they gave other files filtered out.
-	// It is worked out before the walk, since it is also what says the removal can be
-	// made at all — see canRemoveRoots.
-	fileIncludeReasonsWithoutRemoved map[tspath.Path][]*FileIncludeReason
-	// newFiles are the files this walk brought into the program, in the order the
-	// result holds them. It is only set when the result extends an existing program.
-	newFiles   []*ast.SourceFile
-	gaveUp     atomic.Bool
-	acquiredMu sync.Mutex
-	acquired   []*ast.SourceFile
-
 	totalFileCount atomic.Int32
 	libFileCount   atomic.Int32
 
@@ -234,36 +210,6 @@ func processAllProgramFiles(
 	loader.projectReferenceFileMapper.host = nil
 
 	return loader.filesParser.getProcessedFiles(&loader)
-}
-
-func newFileLoader(opts ProgramOptions, rootTaskCapacity int, singleThreaded bool) fileLoader {
-	compilerOptions := opts.Config.CompilerOptions()
-	supportedExtensions := tsoptions.GetSupportedExtensions(compilerOptions, nil /*extraFileExtensions*/)
-	var maxNodeModuleJsDepth int
-	if p := compilerOptions.MaxNodeModuleJsDepth; p != nil {
-		maxNodeModuleJsDepth = *p
-	}
-	return fileLoader{
-		opts:               opts,
-		defaultLibraryPath: tspath.GetNormalizedAbsolutePath(opts.Host.DefaultLibraryPath(), opts.Host.GetCurrentDirectory()),
-		comparePathsOptions: tspath.ComparePathsOptions{
-			UseCaseSensitiveFileNames: opts.Host.FS().UseCaseSensitiveFileNames(),
-			CurrentDirectory:          opts.Host.GetCurrentDirectory(),
-		},
-		filesParser: &filesParser{
-			wg:       core.NewWorkGroup(singleThreaded),
-			maxDepth: maxNodeModuleJsDepth,
-		},
-		rootTasks:           make([]*parseTask, 0, rootTaskCapacity),
-		supportedExtensions: supportedExtensions,
-		supportedExtensionsWithJsonIfResolveJsonModule: tsoptions.GetSupportedExtensionsWithJsonIfResolveJsonModule(compilerOptions, supportedExtensions),
-	}
-}
-
-// giveUp records that the walk has met something an incremental root addition cannot
-// reproduce, so its caller must build a program from scratch instead.
-func (p *fileLoader) giveUp() {
-	p.gaveUp.Store(true)
 }
 
 func (p *fileLoader) toPath(file string) tspath.Path {
@@ -422,19 +368,8 @@ func (p *fileLoader) getDefaultLibFilePriority(a *ast.SourceFile) int {
 }
 
 func (p *fileLoader) loadSourceFileMetaData(fileName string) ast.SourceFileMetaData {
-	return sourceFileMetaData(fileName, p.resolver, p.opts.Config.CompilerOptions())
-}
-
-// sourceFileMetaData is what a file's package scope says about it — the `type` of the
-// nearest package.json that applies to it, where that package.json is, and the module
-// format the two imply.
-//
-// It is a function rather than a method because it is asked twice: as a file is loaded,
-// and about a file that has not been loaded, where the answer decides what parse options
-// the file would get if it were. See Program.SourceFileMetaDataFor.
-func sourceFileMetaData(fileName string, resolver *module.Resolver, compilerOptions *core.CompilerOptions) ast.SourceFileMetaData {
-	packageJsonScope := resolver.GetPackageScopeForPath(tspath.GetDirectoryPath(fileName))
-	moduleResolutionKind := compilerOptions.GetModuleResolutionKind()
+	packageJsonScope := p.resolver.GetPackageScopeForPath(tspath.GetDirectoryPath(fileName))
+	moduleResolutionKind := p.opts.Config.CompilerOptions().GetModuleResolutionKind()
 
 	var packageJsonType, packageJsonDirectory string
 	if packageJsonScope.Exists() {

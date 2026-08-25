@@ -1,9 +1,0 @@
-diff a/tsc/internal/ls/codeactions.go b/tsc/internal/ls/codeactions.go	(rejected hunks)
-@@ -13,6 +13,7 @@ import (
- 	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
- 	"github.com/microsoft/TypeScript/tsc/internal/locale"
- 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsconv"
-+	"github.com/microsoft/TypeScript/tsc/internal/ls/lsutil"
- 	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
- )
- 
