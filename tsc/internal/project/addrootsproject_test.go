@@ -397,7 +397,7 @@ func addRootsAssertRefCounts(t *testing.T, session *Session, program *compiler.P
 
 	var wrong []string
 	seen := map[ParseCacheKey]struct{}{}
-	session.parseCache.entries.Range(func(key ParseCacheKey, entry *refCountCacheEntry[ParseCacheKey, *ast.SourceFile]) bool {
+	session.parseCache.entries.Range(func(key ParseCacheKey, entry *refCountCacheEntry[*ast.SourceFile]) bool {
 		if !strings.HasPrefix(key.FileName, "/p/") {
 			return true
 		}
@@ -442,6 +442,7 @@ func (addRootsClient) ProgressStart(message *diagnostics.Message, args ...any)  
 func (addRootsClient) ProgressFinish(message *diagnostics.Message, args ...any) {}
 func (addRootsClient) IsActive() bool                                           { return true }
 func (addRootsClient) SetLocale(l string)                                       {}
+func (addRootsClient) RegisterContentMapperExtensions(ctx context.Context, extensions []string) error { return nil }
 func (addRootsClient) GetLocale() locale.Locale                                 { return locale.Default }
 
 func (addRootsClient) PublishDiagnostics(ctx context.Context, params *lsproto.PublishDiagnosticsParams) error {
