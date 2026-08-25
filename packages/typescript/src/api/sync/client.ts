@@ -1,12 +1,18 @@
+import type { FileSystem } from "../fs.ts";
 import { fsCallbackNames } from "../fs.ts";
 import {
     type ClientOptions,
     type ClientSocketOptions,
     type ClientSpawnOptions,
+    type ClientWasmOptions,
     getAPIProcessArgs,
     isSpawnOptions,
+    isWasmOptions,
+    type ModuleNameResolutionRequest,
+    type ModuleNameResolver,
     resolveExePath,
 } from "../options.ts";
+import type { RpcChannel } from "../wasmChannel.ts";
 import type {
     APIMethodInfo,
     SourceFileResponseMethod,
@@ -20,14 +26,25 @@ import {
     type TimingInfo,
 } from "../timing.ts";
 
-export type { ClientOptions, ClientSocketOptions, ClientSpawnOptions };
+export type { ClientOptions, ClientSocketOptions, ClientSpawnOptions, ClientWasmOptions };
 
 export class Client {
-    private channel: SyncRpcChannel;
+    private channel: RpcChannel;
     private encoder = new TextEncoder();
     private timing: TimingCollector | undefined;
 
     constructor(options: ClientOptions) {
+        // In-process WebAssembly transport: use the provided channel directly.
+        if (isWasmOptions(options)) {
+            this.channel = options.channel;
+            if (options.collectTiming) {
+                this.timing = new TimingCollector();
+            }
+            this.registerFsCallbacks(options.channel, options.fs);
+            this.registerModuleNameResolver(options.channel, options.resolveModuleName);
+            return;
+        }
+
         if (!isSpawnOptions(options)) {
             throw new Error("Socket connections are not yet supported in the sync client");
         }
@@ -82,6 +99,39 @@ export class Client {
                     return JSON.stringify(result) ?? "";
                 });
             }
+        }
+    }
+
+    private registerModuleNameResolver(channel: RpcChannel, resolve: ModuleNameResolver | undefined): void {
+        if (!resolve) return;
+        channel.registerCallback("resolveModuleName", (_, arg) => {
+            const answer = resolve(JSON.parse(arg) as ModuleNameResolutionRequest);
+            return answer === undefined ? "" : JSON.stringify(answer);
+        });
+    }
+
+    private registerFsCallbacks(channel: RpcChannel, fs: FileSystem | undefined): void {
+        if (!fs) return;
+        for (const name of fsCallbackNames) {
+            if (!fs[name]) continue;
+            if (name === "writeFile") {
+                const callback = fs.writeFile!;
+                channel.registerCallback(name, (_, arg) => {
+                    const { path, data } = JSON.parse(arg);
+                    callback(path, data);
+                    return "";
+                });
+                continue;
+            }
+            const callback = fs[name]!;
+            channel.registerCallback(name, (_, arg) => {
+                const result = callback(JSON.parse(arg));
+                if (name === "readFile") {
+                    if (result === undefined) return "";
+                    return JSON.stringify({ content: result });
+                }
+                return JSON.stringify(result) ?? "";
+            });
         }
     }
 
