@@ -468,11 +468,6 @@ func (c *Checker) GetAwaitedType(t *Type) *Type {
 	return c.getAwaitedType(t)
 }
 
-// GetFullyQualifiedName returns the symbol's name qualified by each of its parents.
-func (c *Checker) GetFullyQualifiedName(symbol *ast.Symbol) string {
-	return c.getFullyQualifiedName(symbol, nil)
-}
-
 func (c *Checker) GetExportSpecifierLocalTargetSymbol(node *ast.Node) *ast.Symbol {
 	// node should be ExportSpecifier | Identifier
 	switch node.Kind {

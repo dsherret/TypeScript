@@ -1,6 +1,6 @@
 diff a/tsc/internal/project/refcountcache.go b/tsc/internal/project/refcountcache.go	(rejected hunks)
 @@ -6,9 +6,30 @@ import (
- 	"github.com/microsoft/typescript-go/internal/collections"
+ 	"github.com/microsoft/TypeScript/tsc/internal/collections"
  )
  
 -type refCountCacheEntry[V any] struct {

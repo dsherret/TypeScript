@@ -143,7 +143,6 @@ func (p *ParsedCommandLine) WithAdditionalRootFiles(fileNames []string) *ParsedC
 		comparePathsOptions: p.comparePathsOptions,
 		wildcardDirectories: p.wildcardDirectories,
 		includeGlobs:        p.includeGlobs,
-		extraFileExtensions: p.extraFileExtensions,
 		// the added names go on the end, so the files the config named literally are
 		// still the front of the list
 		literalFileNamesLen: p.literalFileNamesLen,

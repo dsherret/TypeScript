@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/microsoft/TypeScript/tsc/internal/ast"

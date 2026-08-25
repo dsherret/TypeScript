@@ -1,12 +1,12 @@
 diff a/tsc/internal/api/session.go b/tsc/internal/api/session.go	(rejected hunks)
 @@ -24,6 +24,7 @@ import (
- 	"github.com/microsoft/typescript-go/internal/ls/lsconv"
- 	"github.com/microsoft/typescript-go/internal/lsp/lsproto"
- 	"github.com/microsoft/typescript-go/internal/nodebuilder"
-+	"github.com/microsoft/typescript-go/internal/parser"
- 	"github.com/microsoft/typescript-go/internal/pprof"
- 	"github.com/microsoft/typescript-go/internal/printer"
- 	"github.com/microsoft/typescript-go/internal/project"
+ 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsconv"
+ 	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
+ 	"github.com/microsoft/TypeScript/tsc/internal/nodebuilder"
++	"github.com/microsoft/TypeScript/tsc/internal/parser"
+ 	"github.com/microsoft/TypeScript/tsc/internal/pprof"
+ 	"github.com/microsoft/TypeScript/tsc/internal/printer"
+ 	"github.com/microsoft/TypeScript/tsc/internal/project"
 @@ -589,16 +590,22 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
  		return s.handleUpdateTemporarySnapshot(ctx, parsed.(*UpdateTemporarySnapshotParams))
  	case string(MethodParseConfigFile):

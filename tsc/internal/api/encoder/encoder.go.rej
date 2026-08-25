@@ -6,4 +6,4 @@ diff a/tsc/internal/api/encoder/encoder.go b/tsc/internal/api/encoder/encoder.go
 +	"strconv"
  	"sync"
  
- 	"github.com/microsoft/typescript-go/internal/ast"
+ 	"github.com/microsoft/TypeScript/tsc/internal/ast"

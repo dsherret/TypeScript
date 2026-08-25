@@ -1,12 +1,12 @@
 diff a/tsc/internal/project/session.go b/tsc/internal/project/session.go	(rejected hunks)
 @@ -23,6 +23,7 @@ import (
- 	"github.com/microsoft/typescript-go/internal/ls/lsconv"
- 	"github.com/microsoft/typescript-go/internal/ls/lsutil"
- 	"github.com/microsoft/typescript-go/internal/lsp/lsproto"
-+	"github.com/microsoft/typescript-go/internal/module"
- 	"github.com/microsoft/typescript-go/internal/project/ata"
- 	"github.com/microsoft/typescript-go/internal/project/background"
- 	"github.com/microsoft/typescript-go/internal/project/logging"
+ 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsconv"
+ 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsutil"
+ 	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
++	"github.com/microsoft/TypeScript/tsc/internal/module"
+ 	"github.com/microsoft/TypeScript/tsc/internal/project/ata"
+ 	"github.com/microsoft/TypeScript/tsc/internal/project/background"
+ 	"github.com/microsoft/TypeScript/tsc/internal/project/logging"
 @@ -63,6 +64,15 @@ type SessionOptions struct {
  	PushDiagnosticsEnabled bool
  	DebounceDelay          time.Duration

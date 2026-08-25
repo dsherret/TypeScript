@@ -3,7 +3,7 @@ diff a/tsc/internal/api/callbackfs.go b/tsc/internal/api/callbackfs.go	(rejected
  	"fmt"
  	"time"
  
-+	"github.com/microsoft/typescript-go/internal/bundled"
- 	"github.com/microsoft/typescript-go/internal/json"
- 	"github.com/microsoft/typescript-go/internal/vfs"
++	"github.com/microsoft/TypeScript/tsc/internal/bundled"
+ 	"github.com/microsoft/TypeScript/tsc/internal/json"
+ 	"github.com/microsoft/TypeScript/tsc/internal/vfs"
  )
