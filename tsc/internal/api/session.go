@@ -814,6 +814,8 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetAmbientModules(ctx, parsed.(*GetIntrinsicTypeParams))
 	case string(MethodGetSymbolOfDeclaration):
 		return s.handleGetSymbolOfDeclaration(ctx, parsed.(*GetSymbolOfDeclarationParams))
+	case string(MethodGetExportedSymbolsOfFiles):
+		return s.handleGetExportedSymbolsOfFiles(ctx, parsed.(*GetExportedSymbolsOfFilesParams))
 	case string(MethodSymbolToString):
 		return s.handleSymbolToString(ctx, parsed.(*SymbolToStringParams))
 	case string(MethodGetConstantValue):
@@ -4170,4 +4172,44 @@ func (s *Session) handleGetReferencedSymbolsForNode(ctx context.Context, params 
 		result = append(result, re)
 	}
 	return result, nil
+}
+
+func (s *Session) handleGetExportedSymbolsOfFiles(ctx context.Context, params *GetExportedSymbolsOfFilesParams) ([][]*ExportedSymbolResponse, error) {
+	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer setup.done()
+
+	results := make([][]*ExportedSymbolResponse, len(params.Files))
+	for i, file := range params.Files {
+		sourceFile := setup.program.GetSourceFile(file.ToFileName())
+		if sourceFile == nil {
+			continue
+		}
+		symbol := setup.checker.GetSymbolAtLocation(sourceFile.AsNode())
+		if symbol == nil {
+			continue
+		}
+		exports := setup.checker.GetExportsOfModule(symbol)
+		if len(exports) == 0 {
+			continue
+		}
+		slices.SortFunc(exports, setup.checker.CompareSymbols)
+
+		exported := make([]*ExportedSymbolResponse, len(exports))
+		for j, export := range exports {
+			resp := &ExportedSymbolResponse{Name: ast.EscapeSymbolName(export.Name)}
+			if len(export.Declarations) > 0 {
+				resp.Declarations = make([]NodeHandle, len(export.Declarations))
+				for k, decl := range export.Declarations {
+					resp.Declarations[k] = setup.sd.nodeHandleFrom(decl)
+				}
+			}
+			exported[j] = resp
+		}
+		results[i] = exported
+	}
+
+	return results, nil
 }

@@ -272,13 +272,16 @@ func (d *DocumentIdentifier) UnmarshalJSONFrom(dec *json.Decoder) error {
 			if err != nil {
 				return err
 			}
-			isURI := key.String() == "uri"
+			keyName := key.String()
 			val, err := dec.ReadToken()
 			if err != nil {
 				return err
 			}
-			if isURI {
+			switch keyName {
+			case "uri":
 				d.URI = lsproto.DocumentUri(val.String())
+			case "fileName":
+				d.FileName = val.String()
 			}
 		}
 		// Consume the closing brace
@@ -430,6 +433,7 @@ var unmarshalers = map[Method]func([]byte) (any, error){
 	MethodGetCombinedCodeFix:  unmarshallerFor[GetCombinedCodeFixParams],
 	MethodGetAmbientModules:   unmarshallerFor[GetIntrinsicTypeParams],
 	MethodGetSymbolOfDeclaration: unmarshallerFor[GetSymbolOfDeclarationParams],
+	MethodGetExportedSymbolsOfFiles: unmarshallerFor[GetExportedSymbolsOfFilesParams],
 	MethodSymbolToString:         unmarshallerFor[SymbolToStringParams],
 	MethodRelease:                      unmarshallerFor[ReleaseParams],
 	MethodInitialize:                   noParams,
@@ -1827,6 +1831,7 @@ func noParams(data []byte) (any, error) {
 // Method constants for the fork's language-service and checker exposures.
 const (
 	MethodGetSymbolOfDeclaration Method = "getSymbolOfDeclaration"
+	MethodGetExportedSymbolsOfFiles Method = "getExportedSymbolsOfFiles"
 	MethodSymbolToString         Method = "symbolToString"
 )
 

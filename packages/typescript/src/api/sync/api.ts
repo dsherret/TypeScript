@@ -63,6 +63,7 @@ import type {
     DocumentIdentifier,
     DocumentPosition,
     EmitOutputResponse as ProtocolEmitOutputResponse,
+    ExportedSymbolResponse,
     ImportAdderAction,
     IntrinsicTypeMethod,
     LSPUpdateSnapshotParams,
@@ -1512,6 +1513,23 @@ export class Checker {
         return data ? data.map((d: SymbolResponse) => this.objectRegistry.getOrCreateSymbol(d)) : [];
     }
 
+    getExportedSymbolsOfFiles(files: readonly DocumentIdentifier[]): readonly (readonly ExportedSymbol[])[] {
+        const data = (this.client.apiRequest as (m: string, p: unknown) => any)("getExportedSymbolsOfFiles", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            files,
+        });
+        return files.map((_, i) => {
+            const exports = data?.[i];
+            if (!exports) return [];
+            return exports.map((e: ExportedSymbolResponse) => ({
+                name: unescapeLeadingUnderscores(e.name as __String),
+                escapedName: e.name as __String,
+                declarations: (e.declarations ?? []).map((d: string) => new NodeHandle(d, this.project)),
+            }));
+        });
+    }
+
     dispose(): void {
         this.objectRegistry.clear();
     }
@@ -2941,4 +2959,10 @@ export class Signature {
     get isAbstract(): boolean {
         return (this.flags & SignatureFlags.Abstract) !== 0;
     }
+}
+
+export interface ExportedSymbol {
+    readonly name: string;
+    readonly escapedName: __String;
+    readonly declarations: readonly NodeHandle[];
 }

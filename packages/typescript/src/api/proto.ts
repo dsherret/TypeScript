@@ -135,3 +135,8 @@ export interface FormattingOptions {
 export type OrganizeImportsMode = "all" | "sortAndCombine" | "removeUnused";
 
 export type QuotePreference = "auto" | "double" | "single";
+
+export interface ExportedSymbolResponse {
+    name: string;
+    declarations?: string[];
+}

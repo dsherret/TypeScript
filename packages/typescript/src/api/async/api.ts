@@ -76,6 +76,7 @@ import type {
     TypesPropertyMethod,
     UpdateSnapshotParams,
     UpdateSnapshotResponse,
+    ExportedSymbolResponse,
 } from "../proto.ts";
 import type {
     FileTextEdits,
@@ -1502,6 +1503,23 @@ export class Checker {
             project: this.project.id,
         });
         return data ? data.map((d: SymbolResponse) => this.objectRegistry.getOrCreateSymbol(d)) : [];
+    }
+
+    async getExportedSymbolsOfFiles(files: readonly DocumentIdentifier[]): Promise<readonly (readonly ExportedSymbol[])[]> {
+        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getExportedSymbolsOfFiles", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            files,
+        });
+        return files.map((_, i) => {
+            const exports = data?.[i];
+            if (!exports) return [];
+            return exports.map((e: ExportedSymbolResponse) => ({
+                name: unescapeLeadingUnderscores(e.name as __String),
+                escapedName: e.name as __String,
+                declarations: (e.declarations ?? []).map((d: string) => new NodeHandle(d, this.project)),
+            }));
+        });
     }
 
     dispose(): void {
@@ -2933,4 +2951,10 @@ export class Signature {
     get isAbstract(): boolean {
         return (this.flags & SignatureFlags.Abstract) !== 0;
     }
+}
+
+export interface ExportedSymbol {
+    readonly name: string;
+    readonly escapedName: __String;
+    readonly declarations: readonly NodeHandle[];
 }
