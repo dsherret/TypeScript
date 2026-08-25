@@ -677,6 +677,8 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetExportsOfSymbol(ctx, parsed.(*GetSymbolPropertyParams))
 	case string(MethodGetExportSymbolOfSymbol):
 		return s.handleGetExportSymbolOfSymbol(ctx, parsed.(*GetSymbolPropertyParams))
+	case string(MethodGetGlobalExportsOfSymbol):
+		return s.handleGetGlobalExportsOfSymbol(ctx, parsed.(*GetSymbolPropertyParams))
 	case string(MethodGetSymbolOfType):
 		return s.handleGetSymbolOfType(ctx, parsed.(*GetTypePropertyParams))
 	case string(MethodGetTargetOfType):
@@ -793,6 +795,24 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetTypeArguments(ctx, parsed.(*CheckerTypeParams))
 	case string(MethodGetImportAdderEdits):
 		return s.handleGetImportAdderEdits(ctx, parsed.(*GetImportAdderEditsParams))
+	case string(MethodFormatDocument):
+		return s.handleFormatDocument(ctx, parsed.(*FormatDocumentParams))
+	case string(MethodFormatDocumentRange):
+		return s.handleFormatDocumentRange(ctx, parsed.(*FormatDocumentRangeParams))
+	case string(MethodOrganizeImports):
+		return s.handleOrganizeImports(ctx, parsed.(*OrganizeImportsParams))
+	case string(MethodRename):
+		return s.handleRename(ctx, parsed.(*RenameParams))
+	case string(MethodGetDefinition):
+		return s.handleGetDefinition(ctx, parsed.(*FilePositionParams))
+	case string(MethodGetImplementations):
+		return s.handleGetImplementations(ctx, parsed.(*FilePositionParams))
+	case string(MethodGetCodeFixes):
+		return s.handleGetCodeFixes(ctx, parsed.(*GetCodeFixesParams))
+	case string(MethodGetCombinedCodeFix):
+		return s.handleGetCombinedCodeFix(ctx, parsed.(*GetCombinedCodeFixParams))
+	case string(MethodGetAmbientModules):
+		return s.handleGetAmbientModules(ctx, parsed.(*GetIntrinsicTypeParams))
 	case string(MethodGetConstantValue):
 		return s.handleGetConstantValue(ctx, parsed.(*CheckerNodeParams))
 	case string(MethodGetSignatureFromDeclaration):
@@ -919,6 +939,7 @@ func (s *Session) handleInitialize(ctx context.Context) (*InitializeResponse, er
 	return &InitializeResponse{
 		UseCaseSensitiveFileNames: s.projectSession.FS().UseCaseSensitiveFileNames(),
 		CurrentDirectory:          s.projectSession.GetCurrentDirectory(),
+		Version:                   core.Version(),
 	}, nil
 }
 
@@ -996,6 +1017,20 @@ func (s *Session) handleUpdateSnapshot(ctx context.Context, params *UpdateSnapsh
 		}
 		apiRequest.CloseFiles.Add(path)
 		closedFiles = append(closedFiles, path)
+	}
+
+	// Root files a client names for a project itself. These are absolute file names
+	// rather than documents: they never leave the server as anything else, and a URI
+	// round trip per file is what this exists to avoid paying.
+	for _, change := range params.RootFileChanges {
+		configPath := s.toPath(change.Project.ToAbsoluteFileName(s.projectSession.GetCurrentDirectory()))
+		if apiRequest.RootFiles == nil {
+			apiRequest.RootFiles = make(map[tspath.Path]*project.APIRootFileChange, len(params.RootFileChanges))
+		}
+		apiRequest.RootFiles[configPath] = &project.APIRootFileChange{
+			Added:   s.toAbsoluteFileNames(change.Added),
+			Removed: s.toAbsoluteFileNames(change.Removed),
+		}
 	}
 
 	// Even when nothing is opened or closed, APIUpdate ensures all projects and
@@ -1586,6 +1621,30 @@ func (s *Session) handleGetSymbolsAtLocations(ctx context.Context, params *GetSy
 	}
 
 	return results, nil
+}
+
+// handleGetSymbolOfDeclaration returns the symbol a declaration node declares.
+func (s *Session) handleGetSymbolOfDeclaration(ctx context.Context, params *GetSymbolOfDeclarationParams) (*SymbolResponse, error) {
+	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer setup.done()
+
+	node, err := setup.sd.resolveNodeHandle(setup.program, params.Declaration)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return nil, nil
+	}
+
+	symbol := setup.checker.GetSymbolOfDeclaration(node)
+	if symbol == nil {
+		return nil, nil
+	}
+
+	return setup.newSymbolResponse(symbol), nil
 }
 
 // handleGetTypeOfSymbol returns the type of a symbol.
@@ -2604,6 +2663,33 @@ func (s *Session) handleTypeToString(ctx context.Context, params *TypeToTypeNode
 	return setup.checker.TypeToStringEx(t, enclosingDeclaration, checker.TypeFormatFlagsAllowUniqueESSymbolType|checker.TypeFormatFlagsUseAliasDefinedOutsideCurrentScope, nil), nil
 }
 
+// handleSymbolToString converts a symbol to the string representation the checker
+// gives it at a location. A module symbol reads as the specifier the location's
+// file would import it by, which is what names the container of a declaration a
+// file holds directly.
+func (s *Session) handleSymbolToString(ctx context.Context, params *SymbolToStringParams) (any, error) {
+	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer setup.done()
+
+	symbol, err := setup.resolveSymbolHandle(params.Symbol)
+	if err != nil {
+		return nil, err
+	}
+
+	var enclosingDeclaration *ast.Node
+	if params.Location != "" {
+		enclosingDeclaration, err = setup.sd.resolveNodeHandle(setup.program, params.Location)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return setup.checker.SymbolToStringEx(symbol, enclosingDeclaration, ast.SymbolFlagsAll, checker.SymbolFormatFlagsAllowAnyNodeKind), nil
+}
+
 // handlePrintNode decodes a binary-encoded AST node and prints it to text.
 func (s *Session) handlePrintNode(_ context.Context, params *PrintNodeParams) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(params.Data)
@@ -2611,17 +2697,94 @@ func (s *Session) handlePrintNode(_ context.Context, params *PrintNodeParams) (s
 		return "", fmt.Errorf("%w: invalid base64 data: %w", ErrClientError, err)
 	}
 
-	node, err := encoder.DecodeNodes(data)
+	node, nodes, err := encoder.DecodeNodesIndexed(data)
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to decode AST: %w", ErrClientError, err)
+	}
+
+	emitContext, err := emitContextForSyntheticComments(params.SyntheticComments, nodes)
+	if err != nil {
+		return "", err
 	}
 
 	p := printer.NewPrinter(printer.PrinterOptions{
 		PreserveSourceNewlines:        params.PreserveSourceNewlines,
 		NeverAsciiEscape:              params.NeverAsciiEscape,
 		TerminateUnterminatedLiterals: params.TerminateUnterminatedLiterals,
-	}, printer.PrintHandlers{}, nil)
-	return p.Emit(node, nil), nil
+		RemoveComments:                params.RemoveComments,
+		NewLine:                       core.NewLineKind(params.NewLine),
+	}, printer.PrintHandlers{}, emitContext)
+	return p.Emit(node, parseSourceFileForPrinting(params)), nil
+}
+
+// emitContextForSyntheticComments replays the client's synthetic comments onto the
+// decoded nodes, returning nil when there are none so the printer keeps its
+// context-free path.
+func emitContextForSyntheticComments(all []*NodeSyntheticComments, nodes []*ast.Node) (*printer.EmitContext, error) {
+	if len(all) == 0 {
+		return nil, nil
+	}
+	emitContext := printer.NewEmitContext()
+	for _, nodeComments := range all {
+		if nodeComments == nil {
+			continue
+		}
+		if nodeComments.Node < 1 || nodeComments.Node >= len(nodes) || nodes[nodeComments.Node] == nil {
+			return nil, fmt.Errorf("%w: synthetic comments name node %d, which is not in the encoded tree", ErrClientError, nodeComments.Node)
+		}
+		node := nodes[nodeComments.Node]
+		if comments := toSynthesizedComments(nodeComments.Leading); comments != nil {
+			emitContext.SetSyntheticLeadingComments(node, comments)
+		}
+		if comments := toSynthesizedComments(nodeComments.Trailing); comments != nil {
+			emitContext.SetSyntheticTrailingComments(node, comments)
+		}
+	}
+	return emitContext, nil
+}
+
+func toSynthesizedComments(comments []*SyntheticComment) []printer.SynthesizedComment {
+	if len(comments) == 0 {
+		return nil
+	}
+	result := make([]printer.SynthesizedComment, 0, len(comments))
+	for _, comment := range comments {
+		if comment == nil {
+			continue
+		}
+		result = append(result, printer.SynthesizedComment{
+			Kind:               ast.Kind(comment.Kind),
+			Loc:                core.NewTextRange(-1, -1),
+			HasLeadingNewLine:  comment.HasLeadingNewline,
+			HasTrailingNewLine: comment.HasTrailingNewLine,
+			Text:               comment.Text,
+		})
+	}
+	return result
+}
+
+// parseSourceFileForPrinting reparses the text the node being printed came from.
+//
+// The printer reads comments and original token text off the source file the node
+// belongs to, and a node that arrived as its own encoded subtree has none. The
+// text is reparsed rather than the node relocated into it: only the text and its
+// line map are read, and the node's positions already index into that text.
+func parseSourceFileForPrinting(params *PrintNodeParams) *ast.SourceFile {
+	if params.SourceText == "" {
+		return nil
+	}
+	fileName := params.FileName
+	if fileName == "" {
+		fileName = "/printNode.ts"
+	}
+	scriptKind := core.GetScriptKindFromFileName(fileName)
+	if scriptKind == core.ScriptKindUnknown {
+		scriptKind = core.ScriptKindTS
+	}
+	return parser.ParseSourceFile(ast.SourceFileParseOptions{
+		FileName: fileName,
+		Path:     tspath.Path(fileName),
+	}, params.SourceText, scriptKind)
 }
 
 func (s *Session) handleEmit(ctx context.Context, params *EmitParams) (*EmitResponse, error) {
@@ -2687,8 +2850,18 @@ func emitToOutput(ctx context.Context, program *compiler.Program, options compil
 			name := data.SourceFile.FileName()
 			sourceFileName = &name
 		}
+		// the emitter prepends the byte order mark to the text it writes; the two
+		// are reported separately here, the way ts.OutputFile did
+		if data.WriteByteOrderMark {
+			text = strings.TrimPrefix(text, "\xEF\xBB\xBF")
+		}
 		mu.Lock()
-		outputFiles = append(outputFiles, &EmitOutputFile{FileName: fileName, Text: text, SourceFileName: sourceFileName})
+		outputFiles = append(outputFiles, &EmitOutputFile{
+			FileName:           fileName,
+			Text:               text,
+			SourceFileName:     sourceFileName,
+			WriteByteOrderMark: data.WriteByteOrderMark,
+		})
 		mu.Unlock()
 		return nil
 	}
@@ -3516,7 +3689,8 @@ func (sd *snapshotData) resolveNodeHandle(program *compiler.Program, handle Node
 
 // computeSnapshotChanges computes the per-project source file differences between
 // two snapshots. It uses DiffOrderedMaps on projects to find changed/removed projects,
-// then DiffMaps on FilesByPath for each changed project to collect file-level changes.
+// then asks each changed project's new program what it changed, falling back to
+// DiffMaps on FilesByPath when the program cannot say.
 func computeSnapshotChanges(prev *project.Snapshot, next *project.Snapshot) *SnapshotChanges {
 	prevProjects := prev.ProjectCollection.ProjectsByPath()
 	nextProjects := next.ProjectCollection.ProjectsByPath()
@@ -3533,27 +3707,36 @@ func computeSnapshotChanges(prev *project.Snapshot, next *project.Snapshot) *Sna
 		},
 		// onModified: project changed, diff its files.
 		func(_ tspath.Path, oldProj *project.Project, newProj *project.Project) {
-			if oldProj.GetProgram() == newProj.GetProgram() {
+			oldProgram, newProgram := oldProj.GetProgram(), newProj.GetProgram()
+			if oldProgram == newProgram {
 				return
 			}
-			var oldFiles, newFiles map[tspath.Path]*ast.SourceFile
-			if p := oldProj.GetProgram(); p != nil {
-				oldFiles = p.FilesByPath()
-			}
-			if p := newProj.GetProgram(); p != nil {
-				newFiles = p.FilesByPath()
-			}
 			var projectChanges ProjectFileChanges
-			core.DiffMaps(
-				oldFiles, newFiles,
-				nil, // onAdded: new file in project, not a change.
-				func(path tspath.Path, _ *ast.SourceFile) {
-					projectChanges.DeletedFiles = append(projectChanges.DeletedFiles, path)
-				},
-				func(path tspath.Path, _ *ast.SourceFile, _ *ast.SourceFile) {
-					projectChanges.ChangedFiles = append(projectChanges.ChangedFiles, path)
-				},
-			)
+			// a program built from the one the previous snapshot holds already knows
+			// the files it replaced and the ones it took away, so there is nothing
+			// to diff
+			if changed, removed, ok := newProgram.FilesChangedFrom(oldProgram); ok {
+				projectChanges.ChangedFiles = slices.Clone(changed)
+				projectChanges.DeletedFiles = slices.Clone(removed)
+			} else {
+				var oldFiles, newFiles map[tspath.Path]*ast.SourceFile
+				if oldProgram != nil {
+					oldFiles = oldProgram.FilesByPath()
+				}
+				if newProgram != nil {
+					newFiles = newProgram.FilesByPath()
+				}
+				core.DiffMaps(
+					oldFiles, newFiles,
+					nil, // onAdded: new file in project, not a change.
+					func(path tspath.Path, _ *ast.SourceFile) {
+						projectChanges.DeletedFiles = append(projectChanges.DeletedFiles, path)
+					},
+					func(path tspath.Path, _ *ast.SourceFile, _ *ast.SourceFile) {
+						projectChanges.ChangedFiles = append(projectChanges.ChangedFiles, path)
+					},
+				)
+			}
 			if len(projectChanges.ChangedFiles) > 0 || len(projectChanges.DeletedFiles) > 0 {
 				if changes.ChangedProjects == nil {
 					changes.ChangedProjects = make(map[ProjectID]*ProjectFileChanges)
@@ -3617,6 +3800,16 @@ func formatSessionID(id uint64) string {
 // toPath converts a file name to a normalized path.
 func (s *Session) toPath(fileName string) tspath.Path {
 	return tspath.ToPath(fileName, s.projectSession.GetCurrentDirectory(), s.projectSession.FS().UseCaseSensitiveFileNames())
+}
+
+func (s *Session) toAbsoluteFileNames(fileNames []string) []string {
+	if len(fileNames) == 0 {
+		return nil
+	}
+	currentDirectory := s.projectSession.GetCurrentDirectory()
+	return core.Map(fileNames, func(fileName string) string {
+		return tspath.GetNormalizedAbsolutePath(fileName, currentDirectory)
+	})
 }
 
 // toFileChangeSummary converts API file changes to a project.FileChangeSummary.
@@ -3950,17 +4143,25 @@ func (s *Session) handleGetReferencedSymbolsForNode(ctx context.Context, params 
 			continue
 		}
 		var refs []NodeHandle
+		var writeAccess []bool
 		for _, ref := range entry.References() {
 			if ref.IsNodeEntry() {
 				refs = append(refs, sd.nodeHandleFrom(ref.Node()))
+				writeAccess = append(writeAccess, ast.IsWriteAccessForReference(ref.Node()))
 			}
 		}
 		re := ReferencedSymbolEntry{
-			Definition: sd.nodeHandleFrom(defNode),
-			References: refs,
+			Definition:  sd.nodeHandleFrom(defNode),
+			References:  refs,
+			WriteAccess: writeAccess,
 		}
 		if sym := entry.DefinitionSymbol(); sym != nil {
 			re.Symbol = sd.newSymbolResponse(sym, params.Project)
+			// the display node is the name, not the declaration: asking about the
+			// declaration renders it as a statement, trailing semicolon and all
+			for _, run := range langSvc.GetDefinitionDisplayParts(ctx, sym, core.OrElse(defNode.Name(), defNode)) {
+				re.DisplayParts = append(re.DisplayParts, &DisplayPart{Text: run.Text, Kind: run.ClassificationTypeName})
+			}
 		}
 		result = append(result, re)
 	}

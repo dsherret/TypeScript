@@ -636,6 +636,9 @@ type symbolEntryTransformOptions struct {
 	requireLocationsResult bool
 	// Omit node(s) containing the original position.
 	dropOriginNodes bool
+	// Read only by the rename transform, which shares this struct with every other
+	// transform because they all reach it through one callback signature.
+	rename RenameOptions
 }
 
 type SymbolAndEntriesData struct {
@@ -735,6 +738,7 @@ func (l *LanguageService) getSymbolAndEntries(
 	implementations bool,
 ) []*SymbolAndEntries {
 	var options refOptions
+	sourceFiles := program.GetSourceFiles()
 	if !isRename {
 		options.use = referenceUseReferences
 		if implementations {
@@ -743,8 +747,14 @@ func (l *LanguageService) getSymbolAndEntries(
 	} else {
 		options.use = referenceUseRename
 		options.useAliasesForRename = l.UserPreferences().UseAliasesForRename.IsTrueOrUnknown()
+		// Nobody wants a rename to rewrite the standard library, so keep it out of the
+		// search rather than refusing the rename: the caller's own references are
+		// still renamed. Strada excludes it from findRenameLocations the same way.
+		sourceFiles = core.Filter(sourceFiles, func(file *ast.SourceFile) bool {
+			return !program.IsSourceFileDefaultLibrary(file.Path())
+		})
 	}
-	return l.getReferencedSymbolsForNode(ctx, position, node, program, program.GetSourceFiles(), options)
+	return l.getReferencedSymbolsForNode(ctx, position, node, program, sourceFiles, options)
 }
 
 func (l *LanguageService) ProvideReferences(ctx context.Context, params *lsproto.ReferenceParams, orchestrator CrossProjectOrchestrator) (lsproto.ReferencesResponse, error) {
@@ -997,6 +1007,24 @@ func (l *LanguageService) definitionToReferencedSymbolDefinitionInfo(ctx context
 	default:
 		return nil
 	}
+}
+
+// GetDefinitionDisplayParts returns the classified runs that label a symbol
+// definition in a "find all references" view — the same text a hover shows, split
+// into its keyword, identifier and punctuation pieces.
+func (l *LanguageService) GetDefinitionDisplayParts(ctx context.Context, symbol *ast.Symbol, originalNode *ast.Node) []*lsproto.VSClassifiedTextRun {
+	element := l.getDefinitionKindAndDisplayParts(ctx, symbol, originalNode, true /*vsCapability*/)
+	if element == nil {
+		return nil
+	}
+	runs := element.Runs
+	// The classified path renders a signature by printing a call signature
+	// declaration, which ends in a semicolon the way one inside an interface body
+	// would. Hover's unclassified text has none, so neither should these runs.
+	if n := len(runs); n > 0 && runs[n-1].Text == ";" {
+		runs = runs[:n-1]
+	}
+	return runs
 }
 
 // getDefinitionKindAndDisplayParts returns the classified display text for a symbol definition.

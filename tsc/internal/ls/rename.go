@@ -103,11 +103,12 @@ func (l *LanguageService) symbolAndEntriesToRename(ctx context.Context, params *
 
 	program := l.GetProgram()
 
-	// Defense-in-depth: validate rename eligibility even if the client skipped prepareRename.
-	// Use getRenameInfoForNode directly with the already-resolved node to avoid
+	// Re-validate the node, since a caller that asked for the editor's eligibility
+	// checks may have skipped prepareRename and so never seen them. Use
+	// getRenameInfoForNode directly with the already-resolved node to avoid
 	// re-resolving the position and polluting state baselines.
 	sourceFile := ast.GetSourceFileOfNode(data.OriginalNode)
-	if info, ok := l.getRenameInfoForNode(ctx, params.NewName, data.OriginalNode, sourceFile, program); !ok || !info.CanRename {
+	if info, ok := l.getRenameInfoForNode(ctx, params.NewName, data.OriginalNode, sourceFile, program, options.rename); !ok || !info.CanRename {
 		return lsproto.WorkspaceEditOrNull{}, nil
 	}
 
@@ -166,7 +167,7 @@ func (l *LanguageService) renameEditRange(entry *ReferenceEntry) (lsproto.Range,
 }
 
 // getRenameInfoForNode performs detailed validation for a rename operation on a specific node.
-func (l *LanguageService) getRenameInfoForNode(ctx context.Context, newName string, node *ast.Node, sourceFile *ast.SourceFile, program *compiler.Program) (RenameInfo, bool) {
+func (l *LanguageService) getRenameInfoForNode(ctx context.Context, newName string, node *ast.Node, sourceFile *ast.SourceFile, program *compiler.Program, options RenameOptions) (RenameInfo, bool) {
 	ch, done := program.GetTypeChecker(ctx)
 	defer done()
 
@@ -193,8 +194,10 @@ func (l *LanguageService) getRenameInfoForNode(ctx context.Context, newName stri
 		return RenameInfo{}, false
 	}
 
-	if msg := l.renameBlockedReason(sourceFile, node, symbol, ch, program); msg != nil {
-		return getRenameInfoError(ctx, msg), true
+	if options.ApplyEditorEligibilityChecks {
+		if msg := l.renameBlockedReason(sourceFile, node, symbol, ch, program); msg != nil {
+			return getRenameInfoError(ctx, msg), true
+		}
 	}
 
 	if ast.IsStringLiteralLike(node) && ast.TryGetImportFromModuleSpecifier(node) != nil {

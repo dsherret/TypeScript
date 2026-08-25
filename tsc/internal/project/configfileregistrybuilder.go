@@ -217,6 +217,11 @@ func (c *configFileRegistryBuilder) updateRootFilesWatch(fileName string, entry 
 	if entry.rootFilesWatch == nil {
 		return
 	}
+	// working the globs out walks every root file, and a session that does not watch
+	// never reads them — see Session.updateWatches, which only runs when it does
+	if !c.sessionOptions.WatchEnabled {
+		return
+	}
 
 	var ignored map[string]struct{}
 	var globs []string

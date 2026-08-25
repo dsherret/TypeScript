@@ -1,0 +1,9 @@
+diff a/tsc/internal/api/encoder/encoder.go b/tsc/internal/api/encoder/encoder.go	(rejected hunks)
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/binary"
+ 	"fmt"
+ 	"slices"
++	"strconv"
+ 	"sync"
+ 
+ 	"github.com/microsoft/typescript-go/internal/ast"

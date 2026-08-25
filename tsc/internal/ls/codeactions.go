@@ -34,6 +34,21 @@ type CodeFixContext struct {
 	LS         *LanguageService
 	Diagnostic *lsproto.Diagnostic
 	Params     *lsproto.CodeActionParams
+	// FormatOptions overrides the language service's formatting settings for the
+	// text a fix inserts. Nil uses the language service's own settings, which is
+	// what the LSP path wants; an API client that formats to its own settings
+	// supplies them here.
+	FormatOptions *lsutil.FormatCodeSettings
+}
+
+// FormatCodeSettings returns the settings a fix should format inserted text
+// with: the caller's override when it gave one, the language service's own
+// otherwise.
+func (c *CodeFixContext) FormatCodeSettings() lsutil.FormatCodeSettings {
+	if c.FormatOptions != nil {
+		return *c.FormatOptions
+	}
+	return c.LS.FormatOptions()
 }
 
 // CodeAction represents a single code action fix
@@ -266,6 +281,34 @@ func wantsQuickFixes(only *[]lsproto.CodeActionKind) bool {
 		}
 	}
 	return false
+}
+
+// GetCombinedCodeFix returns the combined ("fix all") edits for a single fix id.
+//
+// createFixAllAction below runs every provider that has a GetAllCodeActions;
+// this runs exactly the one the caller named, which is what an API client asking
+// for a specific fix id wants. The bool reports whether a provider owns the fix
+// id at all, which is distinct from one owning it and finding nothing to fix.
+func (l *LanguageService) GetCombinedCodeFix(
+	ctx context.Context,
+	program *compiler.Program,
+	file *ast.SourceFile,
+	fixId string,
+	formatOptions *lsutil.FormatCodeSettings,
+) (*CombinedCodeActions, bool, error) {
+	for _, provider := range codeFixProviders {
+		if provider.GetAllCodeActions == nil || !slices.Contains(provider.FixIds, fixId) {
+			continue
+		}
+		combined, err := provider.GetAllCodeActions(ctx, &CodeFixContext{
+			SourceFile:    file,
+			Program:       program,
+			LS:            l,
+			FormatOptions: formatOptions,
+		})
+		return combined, true, err
+	}
+	return nil, false, nil
 }
 
 // createFixAllAction creates a source.fixAll code action that applies all auto-fixable

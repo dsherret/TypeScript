@@ -1,0 +1,9 @@
+diff a/tsc/internal/ls/languageservice.go b/tsc/internal/ls/languageservice.go	(rejected hunks)
+@@ -3,6 +3,7 @@ package ls
+ import (
+ 	"github.com/microsoft/typescript-go/internal/ast"
+ 	"github.com/microsoft/typescript-go/internal/compiler"
++	"github.com/microsoft/typescript-go/internal/core"
+ 	"github.com/microsoft/typescript-go/internal/ls/autoimport"
+ 	"github.com/microsoft/typescript-go/internal/ls/lsconv"
+ 	"github.com/microsoft/typescript-go/internal/ls/lsutil"

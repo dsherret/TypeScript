@@ -137,6 +137,10 @@ type Session struct {
 	// When a program is no longer referenced, its source files are
 	// released from the parseCache.
 	programCounter *programCounter
+	// offeredFiles are the parseCache references ParseSourceFile is holding on the
+	// caller's behalf, one per path, until the next snapshot is built.
+	offeredFiles   map[tspath.Path]ParseCacheKey
+	offeredFilesMu sync.Mutex
 
 	// read-only after initialization
 	initialUserPreferences lsutil.UserPreferences
@@ -1837,7 +1841,7 @@ func (s *Session) logCacheStats(snapshot *Snapshot) {
 	var parseCacheSize int
 	var extendedConfigCount int
 	if s.logger.IsVerbose() {
-		s.parseCache.entries.Range(func(_ ParseCacheKey, _ *refCountCacheEntry[*ast.SourceFile]) bool {
+		s.parseCache.entries.Range(func(_ ParseCacheKey, _ *refCountCacheEntry[ParseCacheKey, *ast.SourceFile]) bool {
 			parseCacheSize++
 			return true
 		})

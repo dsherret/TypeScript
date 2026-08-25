@@ -43,11 +43,24 @@ func DecodeSourceFile(data []byte) (*ast.SourceFile, error) {
 
 // DecodeNodes decodes binary-encoded AST data into a tree of *ast.Node objects.
 func DecodeNodes(data []byte) (*ast.Node, error) {
+	root, _, err := DecodeNodesIndexed(data)
+	return root, err
+}
+
+// DecodeNodesIndexed decodes the tree and also returns every node by the index the
+// encoder wrote it at, so a caller can address a node that anything travelling
+// beside the tree — synthetic comments, say — refers to. Index 0 is the nil node
+// and index 1 is the root; a NodeList index holds nil.
+func DecodeNodesIndexed(data []byte) (*ast.Node, []*ast.Node, error) {
 	d, err := newASTDecoder(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return d.decode()
+	root, err := d.decode()
+	if err != nil {
+		return nil, nil, err
+	}
+	return root, d.nodes, nil
 }
 
 func newASTDecoder(data []byte) (*astDecoder, error) {

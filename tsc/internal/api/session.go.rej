@@ -1,0 +1,440 @@
+diff a/tsc/internal/api/session.go b/tsc/internal/api/session.go	(rejected hunks)
+@@ -24,6 +24,7 @@ import (
+ 	"github.com/microsoft/typescript-go/internal/ls/lsconv"
+ 	"github.com/microsoft/typescript-go/internal/lsp/lsproto"
+ 	"github.com/microsoft/typescript-go/internal/nodebuilder"
++	"github.com/microsoft/typescript-go/internal/parser"
+ 	"github.com/microsoft/typescript-go/internal/pprof"
+ 	"github.com/microsoft/typescript-go/internal/printer"
+ 	"github.com/microsoft/typescript-go/internal/project"
+@@ -589,16 +590,22 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
+ 		return s.handleUpdateTemporarySnapshot(ctx, parsed.(*UpdateTemporarySnapshotParams))
+ 	case string(MethodParseConfigFile):
+ 		return s.handleParseConfigFile(ctx, parsed.(*ParseConfigFileParams))
++	case string(MethodParseSourceFile):
++		return s.handleParseSourceFile(ctx, parsed.(*ParseSourceFileParams))
+ 	case string(MethodGetDefaultProjectForFile):
+ 		return s.handleGetDefaultProjectForFile(ctx, parsed.(*GetDefaultProjectForFileParams))
+ 	case string(MethodGetSourceFile):
+ 		return s.handleGetSourceFile(ctx, parsed.(*GetSourceFileParams))
++	case string(MethodGetSourceFileIdentity):
++		return s.handleGetSourceFileIdentity(ctx, parsed.(*GetSourceFileParams))
+ 	case string(MethodGetSourceFileNames):
+ 		return s.handleGetSourceFileNames(ctx, parsed.(*GetSourceFileNamesParams))
+ 	case string(MethodGetSourceFileMetadata):
+ 		return s.handleGetSourceFileMetadata(ctx, parsed.(*GetSourceFileParams))
+ 	case string(MethodGetConfigFileNames):
+ 		return s.handleGetConfigFileNames(ctx, parsed.(*GetProjectDiagnosticsParams))
++	case string(MethodGetProjectRootFiles):
++		return s.handleGetProjectRootFiles(ctx, parsed.(*GetProjectDiagnosticsParams))
+ 	case string(MethodGetConfigSourceFile):
+ 		return s.handleGetConfigSourceFile(ctx, parsed.(*GetSourceFileParams))
+ 	case string(MethodGetSymbolAtPosition):
+@@ -609,6 +616,8 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
+ 		return s.handleGetSymbolAtLocation(ctx, parsed.(*GetSymbolAtLocationParams))
+ 	case string(MethodGetSymbolsAtLocations):
+ 		return s.handleGetSymbolsAtLocations(ctx, parsed.(*GetSymbolsAtLocationsParams))
++	case string(MethodGetSymbolOfDeclaration):
++		return s.handleGetSymbolOfDeclaration(ctx, parsed.(*GetSymbolOfDeclarationParams))
+ 	case string(MethodGetTypeOfSymbol):
+ 		return s.handleGetTypeOfSymbol(ctx, parsed.(*GetTypeOfSymbolParams))
+ 	case string(MethodGetTypesOfSymbols):
+@@ -709,6 +720,8 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
+ 		return s.handleSignatureToSignatureDeclaration(ctx, parsed.(*SignatureToSignatureDeclarationParams))
+ 	case string(MethodTypeToString):
+ 		return s.handleTypeToString(ctx, parsed.(*TypeToTypeNodeParams))
++	case string(MethodSymbolToString):
++		return s.handleSymbolToString(ctx, parsed.(*SymbolToStringParams))
+ 	case string(MethodPrintNode):
+ 		return s.handlePrintNode(ctx, parsed.(*PrintNodeParams))
+ 	case string(MethodEmit):
+@@ -761,12 +792,26 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
+ 		return s.handleGetImmediateAliasedSymbol(ctx, parsed.(*CheckerSymbolParams))
+ 	case string(MethodGetExportsOfModule):
+ 		return s.handleGetExportsOfModule(ctx, parsed.(*CheckerSymbolParams))
++	case string(MethodGetExportedSymbolsOfFiles):
++		return s.handleGetExportedSymbolsOfFiles(ctx, parsed.(*GetExportedSymbolsOfFilesParams))
+ 	case string(MethodGetMemberInModuleExports):
+ 		return s.handleGetMemberInModuleExports(ctx, parsed.(*GetMemberInModuleExportsParams))
+ 	case string(MethodGetJSDocTags):
+ 		return s.handleGetJSDocTags(ctx, parsed.(*CheckerSymbolParams))
+ 	case string(MethodGetDocumentationComment):
+ 		return s.handleGetDocumentationComment(ctx, parsed.(*CheckerSymbolParams))
++	case string(MethodGetJSDocTagsOfSignature):
++		return s.handleGetJSDocTagsOfSignature(ctx, parsed.(*CheckerSignatureParams))
++	case string(MethodGetDocumentationCommentOfSignature):
++		return s.handleGetDocumentationCommentOfSignature(ctx, parsed.(*CheckerSignatureParams))
++	case string(MethodGetSymbolsInScope):
++		return s.handleGetSymbolsInScope(ctx, parsed.(*GetSymbolsInScopeParams))
++	case string(MethodGetLocalsOfNode):
++		return s.handleGetLocalsOfNode(ctx, parsed.(*CheckerNodeParams))
++	case string(MethodGetAwaitedType):
++		return s.handleGetAwaitedType(ctx, parsed.(*CheckerTypeParams))
++	case string(MethodGetFullyQualifiedName):
++		return s.handleGetFullyQualifiedName(ctx, parsed.(*CheckerSymbolParams))
+ 	case string(MethodIsArrayType):
+ 		return s.handleIsArrayType(ctx, parsed.(*CheckerTypeParams))
+ 	case string(MethodIsTupleType):
+@@ -1138,6 +1198,70 @@ func (s *Session) handleParseConfigFile(ctx context.Context, params *ParseConfig
+ 	return NewConfigFileResponse(parsedCommandLine), nil
+ }
+ 
++// handleParseSourceFile parses text as a source file and returns its encoded AST,
++// without opening a snapshot, building a program or binding anything.
++//
++// This is what a purely syntactic edit costs: a client that has just rewritten a file's
++// text and wants the tree back needs a parse of that one file and nothing else. The
++// nodes it returns carry the same handles the program's own parse would — an encoded
++// node's index is a pure function of the AST shape, which parse options do not affect
++// (see TestParseSourceFileNodeIdentityMatchesTheProgram) — so a handle minted from this
++// tree resolves against whatever program later holds the same text.
++//
++// It is the program's own tree, in fact, rather than merely one that matches it: the parse
++// goes through the cache a program build reads, so the build that follows the next
++// snapshot finds this tree instead of parsing the text again. See
++// project.Session.ParseSourceFile, which owns that and the reference it takes. One thing
++// follows from it: text a program is already holding comes back bound, so the node flags
++// the binder sets are present where they were not before. Which of the two a client saw was
++// always a question of whether anything had bound the file yet — see
++// binderInitializedNodeFlags — and now the answer is usually yes.
++//
++// The text is a parameter rather than read from the file system because the file system
++// is the client's, so reading it here would be a round trip back to the caller that
++// already has the string.
++func (s *Session) handleParseSourceFile(ctx context.Context, params *ParseSourceFileParams) (any, error) {
++	fileName := params.File.ToAbsoluteFileName(s.projectSession.GetCurrentDirectory())
++	path := s.toPath(fileName)
++	sourceFile := s.projectSession.ParseSourceFile(
++		ast.SourceFileParseOptions{
++			FileName:                       fileName,
++			Path:                           path,
++			ExternalModuleIndicatorOptions: s.externalModuleIndicatorOptionsFor(params, fileName, path),
++		},
++		params.Text,
++	)
++	return s.encodeSourceFileResponse(sourceFile)
++}
++
++// externalModuleIndicatorOptionsFor is the parse options a program would give the file,
++// taken from the snapshot the client named — read, never opened. A file the program
++// already holds answers with the options it was parsed with; anything else is worked out
++// from the program's compiler options and the file's metadata, which is what the program
++// would do when the file arrived. With no snapshot named, or one that has gone, the
++// defaults stand.
++func (s *Session) externalModuleIndicatorOptionsFor(params *ParseSourceFileParams, fileName string, path tspath.Path) ast.ExternalModuleIndicatorOptions {
++	if params.Snapshot == 0 {
++		return ast.ExternalModuleIndicatorOptions{}
++	}
++	sd, err := s.getSnapshotData(params.Snapshot)
++	if err != nil {
++		return ast.ExternalModuleIndicatorOptions{}
++	}
++	program, err := sd.getProgram(params.Project)
++	if err != nil {
++		return ast.ExternalModuleIndicatorOptions{}
++	}
++	if existing := program.GetSourceFileByPath(path); existing != nil {
++		return existing.ParseOptions().ExternalModuleIndicatorOptions
++	}
++	// the metadata is worked out rather than looked up: a file the program does not hold has
++	// none recorded, and taking the zero value for it says "no package scope" — which reads
++	// a file created under a `"type": "module"` scope as a script and so parses it with
++	// options the program would not have given it. See Program.SourceFileMetaDataFor.
++	return ast.GetExternalModuleIndicatorOptions(fileName, program.Options(), program.SourceFileMetaDataFor(fileName))
++}
++
+ // handleGetSourceFile returns a source file from a project within a snapshot.
+ func (s *Session) handleGetSourceFile(ctx context.Context, params *GetSourceFileParams) (any, error) {
+ 	sd, err := s.getSnapshotData(params.Snapshot)
+@@ -1153,6 +1277,58 @@ func (s *Session) handleGetSourceFile(ctx context.Context, params *GetSourceFile
+ 	return s.encodeSourceFileResponse(program.GetSourceFile(params.File.ToFileName()))
+ }
+ 
++// handleGetSourceFileIdentity says which parse of a file the program is holding,
++// without sending the file.
++//
++// It answers with the two fields handleGetSourceFile's response leads with, read off the
++// very source file that response would have encoded. A client that already has a tree for
++// the path — because it parsed the text itself, or fetched it under another snapshot —
++// needs only these to know whether its copy is the program's, and the whole point is that
++// the answer is a few dozen bytes where the file is a few dozen kilobytes.
++//
++// A file the program does not hold answers nil, which is what handleGetSourceFile answers
++// with too.
++func (s *Session) handleGetSourceFileIdentity(ctx context.Context, params *GetSourceFileParams) (*SourceFileIdentity, error) {
++	sd, err := s.getSnapshotData(params.Snapshot)
++	if err != nil {
++		return nil, err
++	}
++
++	program, err := sd.getProgram(params.Project)
++	if err != nil {
++		return nil, err
++	}
++
++	sourceFile := program.GetSourceFile(params.File.ToFileName())
++	if sourceFile == nil {
++		return nil, nil
++	}
++	return &SourceFileIdentity{
++		ContentHash:     encoder.SourceFileHash(sourceFile),
++		ParseOptionsKey: encoder.ParseOptionsKey(sourceFile),
++	}, nil
++}
++
++// handleGetProjectRootFiles returns the project's root file list, which its
++// description leaves off — see NewProjectResponse.
++func (s *Session) handleGetProjectRootFiles(ctx context.Context, params *GetProjectDiagnosticsParams) ([]string, error) {
++	sd, err := s.getSnapshotData(params.Snapshot)
++	if err != nil {
++		return nil, err
++	}
++	// the roots the project was asked to hold — its config's, then the ones the client
++	// named for it directly — rather than the program's, which also carries whatever
++	// the typings installer added
++	proj, err := sd.getProject(params.Project)
++	if err != nil {
++		return nil, err
++	}
++	if proj.CommandLine == nil {
++		return nil, nil
++	}
++	return proj.RootFileNames(), nil
++}
++
+ // handleGetConfigFileNames returns tsconfig file names associated with the project's command line.
+ func (s *Session) handleGetConfigFileNames(ctx context.Context, params *GetProjectDiagnosticsParams) ([]string, error) {
+ 	sd, err := s.getSnapshotData(params.Snapshot)
+@@ -1626,6 +1826,19 @@ func (s *Session) handleGetExportsOfSymbol(ctx context.Context, params *GetSymbo
+ 	})
+ }
+ 
++// handleGetGlobalExportsOfSymbol returns the UMD global exports declared by a module symbol,
++// that is the names introduced by its `export as namespace X` declarations. tsgo keeps that
++// table on the source file rather than on the symbol, so it is reached through the symbol's
++// value declaration.
++func (s *Session) handleGetGlobalExportsOfSymbol(ctx context.Context, params *GetSymbolPropertyParams) ([]*SymbolResponse, error) {
++	return s.resolveSymbolTablePropertyOfSymbol(ctx, params, func(symbol *ast.Symbol) ast.SymbolTable {
++		if d := symbol.ValueDeclaration; d != nil && ast.IsSourceFile(d) {
++			return d.AsSourceFile().GlobalExports
++		}
++		return nil
++	})
++}
++
+ func (s *Session) handleGetExportSymbolOfSymbol(_ context.Context, params *GetSymbolPropertyParams) (*SymbolResponse, error) {
+ 	return s.resolveSymbolPropertyOfSymbol(params, func(sym *ast.Symbol) *ast.Symbol { return sym.ExportSymbol })
+ }
+@@ -2997,6 +3324,56 @@ func (s *Session) handleGetExportsOfModule(ctx context.Context, params *CheckerS
+ 	return results, nil
+ }
+ 
++// handleGetExportedSymbolsOfFiles answers, for each file named, what it exports and
++// where each exported name is declared.
++//
++// This is handleGetExportsOfModule with the two questions either side of it folded in
++// — which symbol the file is, and where each export's declarations are — because a
++// caller asking a whole project what it exports otherwise pays three requests a file
++// to learn something the checker already has in hand.
++//
++// A file the program does not hold, or one that is not a module, answers with nothing
++// rather than an error: a sweep over a project's files should not fail on one of them.
++func (s *Session) handleGetExportedSymbolsOfFiles(ctx context.Context, params *GetExportedSymbolsOfFilesParams) ([][]*ExportedSymbolResponse, error) {
++	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
++	if err != nil {
++		return nil, err
++	}
++	defer setup.done()
++
++	results := make([][]*ExportedSymbolResponse, len(params.Files))
++	for i, file := range params.Files {
++		sourceFile := setup.program.GetSourceFile(file.ToFileName())
++		if sourceFile == nil {
++			continue
++		}
++		symbol := setup.checker.GetSymbolAtLocation(sourceFile.AsNode())
++		if symbol == nil {
++			continue
++		}
++		exports := setup.checker.GetExportsOfModule(symbol)
++		if len(exports) == 0 {
++			continue
++		}
++		slices.SortFunc(exports, setup.checker.CompareSymbols)
++
++		exported := make([]*ExportedSymbolResponse, len(exports))
++		for j, export := range exports {
++			resp := &ExportedSymbolResponse{Name: ast.EscapeSymbolName(export.Name)}
++			if len(export.Declarations) > 0 {
++				resp.Declarations = make([]NodeHandle, len(export.Declarations))
++				for k, decl := range export.Declarations {
++					resp.Declarations[k] = setup.sd.nodeHandleFrom(decl)
++				}
++			}
++			exported[j] = resp
++		}
++		results[i] = exported
++	}
++
++	return results, nil
++}
++
+ // handleGetMemberInModuleExports returns an export by name from a module symbol.
+ func (s *Session) handleGetMemberInModuleExports(ctx context.Context, params *GetMemberInModuleExportsParams) (*SymbolResponse, error) {
+ 	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+@@ -3077,6 +3454,155 @@ func (s *Session) handleGetDocumentationComment(ctx context.Context, params *Che
+ 	return langSvc.GetSymbolDocumentationComment(setup.checker, symbol), nil
+ }
+ 
++// handleGetJSDocTagsOfSignature returns the JSDoc tags on a signature's declaration.
++func (s *Session) handleGetJSDocTagsOfSignature(ctx context.Context, params *CheckerSignatureParams) ([]*JSDocTagInfo, error) {
++	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
++	if err != nil {
++		return nil, err
++	}
++	defer setup.done()
++
++	sig, err := setup.resolveSignatureHandle(params.Signature)
++	if err != nil {
++		return nil, err
++	}
++
++	langSvc, err := s.setupLanguageService(setup.sd, setup.program, params.Project, "")
++	if err != nil {
++		return nil, err
++	}
++
++	tags := langSvc.GetSignatureJSDocTags(sig.Declaration())
++	if len(tags) == 0 {
++		return nil, nil
++	}
++	results := make([]*JSDocTagInfo, len(tags))
++	for i, tag := range tags {
++		results[i] = &JSDocTagInfo{Name: tag.Name, Text: tag.Text}
++	}
++	return results, nil
++}
++
++// handleGetDocumentationCommentOfSignature returns the rendered documentation comment of a
++// signature's declaration as plain text.
++func (s *Session) handleGetDocumentationCommentOfSignature(ctx context.Context, params *CheckerSignatureParams) (string, error) {
++	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
++	if err != nil {
++		return "", err
++	}
++	defer setup.done()
++
++	sig, err := setup.resolveSignatureHandle(params.Signature)
++	if err != nil {
++		return "", err
++	}
++
++	langSvc, err := s.setupLanguageService(setup.sd, setup.program, params.Project, "")
++	if err != nil {
++		return "", err
++	}
++
++	return langSvc.GetSignatureDocumentationComment(setup.checker, sig.Declaration()), nil
++}
++
++// handleGetSymbolsInScope returns every symbol visible at a location that matches the
++// requested meaning, walking outwards from the location to the globals.
++func (s *Session) handleGetSymbolsInScope(ctx context.Context, params *GetSymbolsInScopeParams) ([]*SymbolResponse, error) {
++	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
++	if err != nil {
++		return nil, err
++	}
++	defer setup.done()
++
++	node, err := setup.sd.resolveNodeHandle(setup.program, params.Location)
++	if err != nil {
++		return nil, err
++	}
++
++	symbols := setup.checker.GetSymbolsInScope(node, ast.SymbolFlags(params.Meaning))
++	if len(symbols) == 0 {
++		return nil, nil
++	}
++	slices.SortFunc(symbols, setup.checker.CompareSymbols)
++
++	results := make([]*SymbolResponse, len(symbols))
++	for i, sym := range symbols {
++		results[i] = setup.newSymbolResponse(sym)
++	}
++	return results, nil
++}
++
++// handleGetLocalsOfNode returns the symbols the binder placed in a node's own local scope,
++// in declaration order. Nodes that do not hold locals return nothing.
++func (s *Session) handleGetLocalsOfNode(ctx context.Context, params *CheckerNodeParams) ([]*SymbolResponse, error) {
++	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
++	if err != nil {
++		return nil, err
++	}
++	defer setup.done()
++
++	node, err := setup.sd.resolveNodeHandle(setup.program, params.Location)
++	if err != nil {
++		return nil, err
++	}
++	if !ast.IsLocalsContainer(node) {
++		return nil, nil
++	}
++
++	locals := node.Locals()
++	if len(locals) == 0 {
++		return nil, nil
++	}
++	symbols := make([]*ast.Symbol, 0, len(locals))
++	for _, sym := range locals {
++		symbols = append(symbols, sym)
++	}
++	// a SymbolTable is a plain map, so sort by the checker's ordering (first declaration
++	// position) to turn Go's randomized iteration into declaration order.
++	slices.SortFunc(symbols, setup.checker.CompareSymbols)
++
++	results := make([]*SymbolResponse, len(symbols))
++	for i, sym := range symbols {
++		results[i] = setup.newSymbolResponse(sym)
++	}
++	return results, nil
++}
++
++// handleGetAwaitedType returns the type a value of the given type resolves to when awaited.
++func (s *Session) handleGetAwaitedType(ctx context.Context, params *CheckerTypeParams) (*TypeResponse, error) {
++	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
++	if err != nil {
++		return nil, err
++	}
++	defer setup.done()
++
++	t, err := setup.resolveTypeHandle(params.Type)
++	if err != nil {
++		return nil, err
++	}
++
++	return setup.newTypeResponse(setup.checker.GetAwaitedType(t)), nil
++}
++
++// handleGetFullyQualifiedName returns the symbol's name qualified by each of its parents.
++func (s *Session) handleGetFullyQualifiedName(ctx context.Context, params *CheckerSymbolParams) (string, error) {
++	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
++	if err != nil {
++		return "", err
++	}
++	defer setup.done()
++
++	symbol, err := setup.resolveSymbolHandle(params.Symbol)
++	if err != nil {
++		return "", err
++	}
++	if symbol == nil {
++		return "", nil
++	}
++
++	return setup.checker.GetFullyQualifiedName(symbol), nil
++}
++
+ // handleGetTypeArguments returns the type arguments of a type reference.
+ func (s *Session) handleGetTypeArguments(ctx context.Context, params *CheckerTypeParams) ([]*TypeResponse, error) {
+ 	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)

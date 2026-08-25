@@ -101,7 +101,7 @@ func (f *diskFile) IsOverlay() bool {
 }
 
 func (f *diskFile) Kind() core.ScriptKind {
-	return core.GetScriptKindFromFileName(f.fileName)
+	return getScriptKind(f.fileName)
 }
 
 func (f *diskFile) Clone() *diskFile {
@@ -406,4 +406,14 @@ func (fs *overlayFS) processChanges(changes []FileChange) (FileChangeSummary, ma
 
 	fs.overlays = newOverlays
 	return result, newOverlays
+}
+
+// getScriptKind is GetScriptKindFromFileName with TypeScript's own fallback: a
+// file whose extension says nothing is parsed as TypeScript rather than being
+// refused by the parser.
+func getScriptKind(fileName string) core.ScriptKind {
+	if scriptKind := core.GetScriptKindFromFileName(fileName); scriptKind != core.ScriptKindUnknown {
+		return scriptKind
+	}
+	return core.ScriptKindTS
 }

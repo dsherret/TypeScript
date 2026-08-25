@@ -1,0 +1,47 @@
+diff a/tsc/internal/ls/rename.go b/tsc/internal/ls/rename.go	(rejected hunks)
+@@ -30,7 +30,21 @@ type RenameInfo struct {
+ 	NewFileName           string
+ }
+ 
+-func (l *LanguageService) ProvideRename(ctx context.Context, params *lsproto.RenameParams, orchestrator CrossProjectOrchestrator) (lsproto.WorkspaceEditOrNull, error) {
++// RenameOptions distinguishes rename's two consumers, which want different
++// answers for the same symbol.
++type RenameOptions struct {
++	// ApplyEditorEligibilityChecks refuses a rename that an editor has no business
++	// offering, because the user cannot meaningfully accept it: symbols owned by the
++	// standard library or by a package under node_modules. Strada scopes these checks
++	// to `getRenameInfo`, which only `prepareRename` consults; `findRenameLocations`
++	// applies none of them, so a programmatic caller that owns every file in its
++	// program - the API's model - can rename across those boundaries. An LSP client
++	// may issue a rename without a prepareRename first, so the server asks for the
++	// checks here as well.
++	ApplyEditorEligibilityChecks bool
++}
++
++func (l *LanguageService) ProvideRename(ctx context.Context, params *lsproto.RenameParams, orchestrator CrossProjectOrchestrator, options RenameOptions) (lsproto.WorkspaceEditOrNull, error) {
+ 	return handleCrossProject(
+ 		l,
+ 		ctx,
+@@ -40,10 +54,12 @@ func (l *LanguageService) ProvideRename(ctx context.Context, params *lsproto.Ren
+ 		combineRenameResponse,
+ 		true,  /*isRename*/
+ 		false, /*implementations*/
+-		symbolEntryTransformOptions{},
++		symbolEntryTransformOptions{rename: options},
+ 	)
+ }
+ 
++// GetRenameInfo backs `textDocument/prepareRename`, so it always reports the
++// editor's view of whether a symbol may be renamed.
+ func (l *LanguageService) GetRenameInfo(ctx context.Context, newName string, documentURI lsproto.DocumentUri, position lsproto.Position) RenameInfo {
+ 	program, sourceFile := l.getProgramAndFile(documentURI)
+ 	pos := int(l.converters.LineAndCharacterToPosition(sourceFile, position))
+@@ -52,7 +68,7 @@ func (l *LanguageService) GetRenameInfo(ctx context.Context, newName string, doc
+ 	node = getAdjustedLocation(node, true /*forRename*/, sourceFile)
+ 
+ 	if nodeIsEligibleForRename(node) {
+-		if renameInfo, ok := l.getRenameInfoForNode(ctx, newName, node, sourceFile, program); ok {
++		if renameInfo, ok := l.getRenameInfoForNode(ctx, newName, node, sourceFile, program, RenameOptions{ApplyEditorEligibilityChecks: true}); ok {
+ 			return renameInfo
+ 		}
+ 	}

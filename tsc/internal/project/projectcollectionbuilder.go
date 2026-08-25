@@ -220,6 +220,23 @@ func (b *ProjectCollectionBuilder) HandleAPIRequest(apiRequest *APISnapshotReque
 		}
 	}
 
+	// after the opens, so a project whose roots arrive with the request that opens it
+	// is built with them, and before the update below, so it is built only once
+	for configPath, change := range apiRequest.RootFiles {
+		entry, ok := b.configuredProjects.Load(configPath)
+		if !ok {
+			return fmt.Errorf("project not found for root file change: %s", configPath)
+		}
+		rootFiles := applyRootFileChange(b.apiState.rootFiles[configPath], change)
+		if b.apiState.rootFiles == nil {
+			b.apiState.rootFiles = make(map[tspath.Path][]string, len(apiRequest.RootFiles))
+		}
+		b.apiState.rootFiles[configPath] = rootFiles
+		entry.Change(func(p *Project) {
+			p.setAPIRootFiles(rootFiles)
+		})
+	}
+
 	for configPath := range b.apiState.openProjects {
 		if entry, ok := b.configuredProjects.Load(configPath); ok {
 			b.updateProgram(entry, logger)
@@ -235,6 +252,9 @@ func (b *ProjectCollectionBuilder) HandleAPIRequest(apiRequest *APISnapshotReque
 	}
 
 	for projectPath := range projectsToClose {
+		// the roots go with the project: a client that opens it again is opening a
+		// project it has named nothing for yet
+		delete(b.apiState.rootFiles, projectPath)
 		if entry, ok := b.configuredProjects.Load(projectPath); ok {
 			b.deleteConfiguredProject(entry, logger)
 		}
@@ -264,6 +284,26 @@ func (b *ProjectCollectionBuilder) HandleAPIRequest(apiRequest *APISnapshotReque
 	}
 
 	return nil
+}
+
+// applyRootFileChange returns the project's API root files with change applied. The
+// result is always a new slice, because the one it derives from belongs to the snapshot
+// this one is being built from.
+//
+// Removals are applied first, so a name that is both removed and added ends up at the
+// end of the list where an addition belongs.
+func applyRootFileChange(rootFiles []string, change *APIRootFileChange) []string {
+	result := rootFiles
+	if len(change.Removed) > 0 {
+		removed := collections.NewSetFromItems(change.Removed...)
+		result = slices.DeleteFunc(slices.Clone(result), removed.Has)
+	}
+	if len(change.Added) > 0 {
+		result = slices.Concat(result, change.Added)
+	} else if len(change.Removed) == 0 {
+		result = slices.Clone(result)
+	}
+	return result
 }
 
 func (b *ProjectCollectionBuilder) DidChangeFiles(summary FileChangeSummary, logger *logging.LogTree) {
@@ -298,7 +338,9 @@ func (b *ProjectCollectionBuilder) DidChangeFiles(summary FileChangeSummary, log
 		if summary.HasExcessiveNonCreateWatchEvents() {
 			entry.Change(func(p *Project) {
 				p.dirty = true
-				p.dirtyFilePath = ""
+				p.dirtyFiles = nil
+				p.deletedFiles = nil
+				p.dirtyFilesKnown = false
 				if logger != nil {
 					logger.Logf("Marking project as dirty due to excessive watch changes: %s", p.configFilePath)
 				}
@@ -700,7 +742,9 @@ func (b *ProjectCollectionBuilder) DidUpdateATAState(ataChanges map[tspath.Path]
 				)
 				p.typingsWatch = p.typingsWatch.Clone(typingsWatchGlobs)
 				p.dirty = true
-				p.dirtyFilePath = ""
+				p.dirtyFiles = nil
+				p.deletedFiles = nil
+				p.dirtyFilesKnown = false
 			},
 		)
 	}
@@ -756,10 +800,11 @@ func (b *ProjectCollectionBuilder) markProjectsAffectedByConfigChanges(
 			panic(fmt.Sprintf("project %s affected by config change not found", projectPath))
 		}
 		project.ChangeIf(
-			func(p *Project) bool { return !p.dirty || p.dirtyFilePath != "" },
+			// what changed about the config is read out of the config itself when the
+			// program is next built, so the files that changed stay as they are
+			func(p *Project) bool { return !p.dirty },
 			func(p *Project) {
 				p.dirty = true
-				p.dirtyFilePath = ""
 				if logger != nil {
 					logger.Logf("Marking project %s as dirty due to change affecting config", projectPath)
 				}
@@ -1247,7 +1292,9 @@ func (b *ProjectCollectionBuilder) updateProgram(entry dirty.Value[*Project], lo
 					project.programFilesWatch = project.CloneWatchers()
 				}
 				project.dirty = false
-				project.dirtyFilePath = ""
+				project.dirtyFiles = nil
+				project.deletedFiles = nil
+				project.dirtyFilesKnown = true
 				b.releaseDroppedProjectReferences(oldProgram, result.Program, project.configFilePath)
 				if oldCheckerPool != nil {
 					oldCheckerPool.Discard()
@@ -1265,52 +1312,81 @@ func (b *ProjectCollectionBuilder) updateProgram(entry dirty.Value[*Project], lo
 	return filesChanged
 }
 
+// maxDirtyFilesTracked bounds the list of changed files a project carries. Swapping
+// files into a program one at a time stops paying once there are many of them — each
+// one is a lookup through the host and a comparison of what it imports — and keeping
+// the list short is also what keeps the search through it cheap when a whole batch of
+// files changes at once.
+const maxDirtyFilesTracked = 8
+
 func (b *ProjectCollectionBuilder) markFilesChanged(entry dirty.Value[*Project], paths []tspath.Path, changeType lsproto.FileChangeType, logger *logging.LogTree) {
 	var dirty bool
-	var dirtyFilePath tspath.Path
+	var dirtyFiles []tspath.Path
+	var deletedFiles []tspath.Path
+	var dirtyFilesKnown bool
 	entry.ChangeIf(
 		func(p *Project) bool {
-			if p.Program == nil || p.dirty && p.dirtyFilePath == "" {
+			if p.Program == nil || p.dirty && !p.dirtyFilesKnown {
 				return false
 			}
 
-			dirtyFilePath = p.dirtyFilePath
+			dirtyFiles = p.dirtyFiles
+			deletedFiles = p.deletedFiles
+			dirtyFilesKnown = p.dirtyFilesKnown
 			for _, path := range paths {
 				if p.containsFile(path) {
 					dirty = true
-					if changeType == lsproto.FileChangeTypeDeleted {
-						dirtyFilePath = ""
-						break
-					}
 					// package.json changes can affect module resolution and package
 					// identity (e.g. dedup decisions), so they must always trigger
 					// a full rebuild rather than a single-file clone.
 					if tspath.GetBaseFileName(string(path)) == "package.json" {
-						dirtyFilePath = ""
+						dirtyFilesKnown = false
 						break
 					}
-					if dirtyFilePath == "" {
-						dirtyFilePath = path
-					} else if dirtyFilePath != path {
-						dirtyFilePath = ""
+					if changeType == lsproto.FileChangeTypeDeleted {
+						// a deleted file is only answerable together with the root
+						// file list, which arrives later in the same update — see
+						// Project.updateRootFilesInProgram
+						if len(deletedFiles) == maxDirtyFilesTracked {
+							dirtyFilesKnown = false
+							break
+						}
+						if !slices.Contains(deletedFiles, path) {
+							// clipped because the project this list came from is still using it
+							deletedFiles = append(slices.Clip(deletedFiles), path)
+						}
+						continue
+					}
+					if len(dirtyFiles) == maxDirtyFilesTracked {
+						dirtyFilesKnown = false
 						break
+					}
+					if !slices.Contains(dirtyFiles, path) {
+						// clipped because the project this list came from is still using it
+						dirtyFiles = append(slices.Clip(dirtyFiles), path)
 					}
 				} else if p.host != nil &&
 					(changeType == lsproto.FileChangeTypeCreated && p.host.sourceFS.SeenFileOrMissingParentDirectory(path) ||
 						changeType != lsproto.FileChangeTypeCreated && p.host.sourceFS.SeenFile(path)) {
 					dirty = true
-					dirtyFilePath = ""
+					dirtyFilesKnown = false
 					break
 				}
 			}
-			return dirty || p.dirtyFilePath != dirtyFilePath
+			if !dirtyFilesKnown {
+				dirtyFiles = nil
+				deletedFiles = nil
+			}
+			return dirty || dirtyFilesKnown != p.dirtyFilesKnown || len(dirtyFiles) != len(p.dirtyFiles) || len(deletedFiles) != len(p.deletedFiles)
 		},
 		func(p *Project) {
 			p.dirty = true
-			p.dirtyFilePath = dirtyFilePath
+			p.dirtyFiles = dirtyFiles
+			p.deletedFiles = deletedFiles
+			p.dirtyFilesKnown = dirtyFilesKnown
 			if logger != nil {
-				if dirtyFilePath != "" {
-					logger.Logf("Marking project %s as dirty due to changes in %s", p.configFileName, dirtyFilePath)
+				if len(dirtyFiles) > 0 {
+					logger.Logf("Marking project %s as dirty due to changes in %s", p.configFileName, dirtyFiles)
 				} else {
 					logger.Logf("Marking project %s as dirty", p.configFileName)
 				}

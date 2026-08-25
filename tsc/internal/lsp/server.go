@@ -1959,7 +1959,7 @@ func (s *Server) handleRename(ctx context.Context, params *lsproto.RenameParams,
 		return s.handleWillRenameFilesWorker(ctx, renameFilesParams, req, true /*sendRenameFile*/)
 	}
 
-	return defaultLs.ProvideRename(ctx, params, orchestrator)
+	return defaultLs.ProvideRename(ctx, params, orchestrator, ls.RenameOptions{ApplyEditorEligibilityChecks: true})
 }
 
 func (s *Server) handleWillRenameFiles(ctx context.Context, params *lsproto.RenameFilesParams, msg *lsproto.RequestMessage) (lsproto.WillRenameFilesResponse, error) {

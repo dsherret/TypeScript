@@ -16,6 +16,36 @@ type ResolutionHost interface {
 	GetCurrentDirectory() string
 }
 
+// ModuleNameResolutionHook is implemented by a ResolutionHost that wants to
+// answer module resolutions itself.
+//
+// It exists for hosts that resolve by rules the compiler does not implement —
+// a Deno-style host that writes `./mod.ts` where node would write `./mod`, or
+// anything else that maps a specifier to a file its own way. The compiler asks
+// before doing its own work and takes the answer as final, so a host that
+// returns handled must return a resolution it is happy to be believed about.
+//
+// Returning handled = false is not an error: it means the host has no opinion
+// about this specifier and the compiler should resolve it normally. A host that
+// only rewrites some specifiers therefore says nothing about the rest.
+type ModuleNameResolutionHook interface {
+	ResolveModuleNameFromHost(moduleName string, containingFile string, resolutionMode core.ResolutionMode) (answer *HostModuleResolution, handled bool)
+}
+
+// HostModuleResolution is what a ModuleNameResolutionHook answers with.
+//
+// A host may either resolve the specifier itself, by setting Resolved, or hand
+// back a different specifier for the compiler to resolve, by setting ModuleName.
+// The second is what a host that only rewrites wants: a Deno-style host turning
+// `./mod.ts` into `./mod` is saying where to look, not how to look, and would
+// otherwise have to reimplement node resolution to say so.
+//
+// Setting neither means the specifier resolves to nothing.
+type HostModuleResolution struct {
+	Resolved   *ResolvedModule
+	ModuleName string
+}
+
 type ModeAwareCacheKey struct {
 	Name string
 	Mode core.ResolutionMode
@@ -134,4 +164,15 @@ func (e extensions) Array() []string {
 		result = append(result, tspath.ExtensionJson)
 	}
 	return result
+}
+
+// GetResolved returns the resolution the host gave, as a result the compiler's
+// callers can read. A host that resolved to nothing still owes them a struct:
+// the compiler's own resolution never returns nil, and they read fields off what
+// they are handed rather than checking first.
+func (a *HostModuleResolution) GetResolved() *ResolvedModule {
+	if a == nil || a.Resolved == nil {
+		return &ResolvedModule{}
+	}
+	return a.Resolved
 }

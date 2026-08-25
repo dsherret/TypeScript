@@ -80,6 +80,29 @@ func GetSymbolJSDocTags(symbol *ast.Symbol) []JSDocTagInfo {
 	return infos
 }
 
+// GetSignatureDocumentationComment renders the documentation comment of a signature's
+// declaration as plain text. A signature has no symbol of its own, so this is keyed on the
+// declaration the way signature help already renders it.
+func (l *LanguageService) GetSignatureDocumentationComment(c *checker.Checker, declaration *ast.Node) string {
+	if declaration == nil {
+		return ""
+	}
+	return l.getDocumentationFromDeclaration(c, nil /*symbol*/, declaration, nil /*location*/, lsproto.MarkupKindPlainText, true /*commentOnly*/)
+}
+
+// GetSignatureJSDocTags collects the JSDoc tags on a signature's declaration, rendering each
+// tag's text as a plain string the same way GetSymbolJSDocTags does.
+func (l *LanguageService) GetSignatureJSDocTags(declaration *ast.Node) []JSDocTagInfo {
+	if declaration == nil {
+		return nil
+	}
+	var infos []JSDocTagInfo
+	for _, tag := range declarationJSDocTags(declaration) {
+		infos = append(infos, JSDocTagInfo{Name: tag.TagName().Text(), Text: getJSDocTagText(tag)})
+	}
+	return infos
+}
+
 // declarationJSDocTags returns the JSDoc tags associated with a declaration, walking the
 // JSDoc comment location chain like the checker's getAllJSDocTags.
 func declarationJSDocTags(node *ast.Node) []*ast.Node {

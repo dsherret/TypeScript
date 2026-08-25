@@ -300,12 +300,33 @@ const (
 // file text. The EncodeNode function provides this entrypoint.
 
 // SourceFileHash returns the 128-bit content hash for a source file as a hex string.
+//
+// This is the same value HeaderOffsetHash* carries, in the form the client reads that
+// header back as — so a client can be told a file's hash without being sent the file.
 func SourceFileHash(sourceFile *ast.SourceFile) string {
 	h := sourceFile.Hash
 	return fmt.Sprintf("%016x%016x", h.Hi, h.Lo)
 }
 
+// ParseOptionsKey returns a source file's parse options key as a decimal string.
+//
+// The counterpart to SourceFileHash: the same value HeaderOffsetParseOptions carries,
+// in the form the client reads that header back as. It goes through the same
+// encodeParseOptions the header does, so the two cannot say different things about the
+// same file.
+func ParseOptionsKey(sourceFile *ast.SourceFile) string {
+	return strconv.FormatUint(uint64(encodeParseOptions(sourceFile.ParseOptions().ExternalModuleIndicatorOptions)), 10)
+}
+
 // encodeParseOptions encodes the per-file ExternalModuleIndicatorOptions as a uint32 bitmask.
+//
+// This is the mirror of ast.SourceFileParseOptions, minus the file name and path, and a
+// client's source file cache keys on it together with the content hash and the path. Those
+// three have to settle the parse between them, and today they do: parser.ParseSourceFile
+// reads the options, the text and the script kind, and the script kind follows from the
+// path's extension. Anything added to SourceFileParseOptions that changes the tree has to
+// be added here too, or two trees parsed under different assumptions become
+// indistinguishable to a client holding one of them.
 func encodeParseOptions(opts ast.ExternalModuleIndicatorOptions) uint32 {
 	var bits uint32
 	if opts.JSX {

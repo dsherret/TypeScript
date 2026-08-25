@@ -32,6 +32,37 @@ func (l *LanguageService) toLSProtoTextEdits(file *ast.SourceFile, changes []cor
 	return result
 }
 
+// FormatDocumentWithSettings returns the edits that format an entire file under the given
+// settings. It exists beside ProvideFormatDocument because an LSP FormattingOptions can only
+// express tab size, spaces-versus-tabs and trailing whitespace, while the formatter also reads
+// the indent size, the indent style and the newline character.
+func (l *LanguageService) FormatDocumentWithSettings(
+	ctx context.Context,
+	documentURI lsproto.DocumentUri,
+	options lsutil.FormatCodeSettings,
+) []*lsproto.TextEdit {
+	if l.UserPreferences().EnableFormatting.IsFalse() {
+		return nil
+	}
+	_, file := l.getProgramAndFile(documentURI)
+	return l.toLSProtoTextEdits(file, l.getFormattingEditsForDocument(ctx, file, options))
+}
+
+// FormatDocumentRangeWithSettings returns the edits that format a span of a file under the
+// given settings. See FormatDocumentWithSettings for why it takes them directly.
+func (l *LanguageService) FormatDocumentRangeWithSettings(
+	ctx context.Context,
+	documentURI lsproto.DocumentUri,
+	options lsutil.FormatCodeSettings,
+	r lsproto.Range,
+) []*lsproto.TextEdit {
+	if l.UserPreferences().EnableFormatting.IsFalse() {
+		return nil
+	}
+	_, file := l.getProgramAndFile(documentURI)
+	return l.toLSProtoTextEdits(file, l.getFormattingEditsForRange(ctx, file, options, l.converters.FromLSPRange(file, r)))
+}
+
 func (l *LanguageService) ProvideFormatDocument(
 	ctx context.Context,
 	documentURI lsproto.DocumentUri,

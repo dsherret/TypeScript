@@ -1,0 +1,95 @@
+diff a/tsc/internal/project/session.go b/tsc/internal/project/session.go	(rejected hunks)
+@@ -23,6 +23,7 @@ import (
+ 	"github.com/microsoft/typescript-go/internal/ls/lsconv"
+ 	"github.com/microsoft/typescript-go/internal/ls/lsutil"
+ 	"github.com/microsoft/typescript-go/internal/lsp/lsproto"
++	"github.com/microsoft/typescript-go/internal/module"
+ 	"github.com/microsoft/typescript-go/internal/project/ata"
+ 	"github.com/microsoft/typescript-go/internal/project/background"
+ 	"github.com/microsoft/typescript-go/internal/project/logging"
+@@ -63,6 +64,15 @@ type SessionOptions struct {
+ 	PushDiagnosticsEnabled bool
+ 	DebounceDelay          time.Duration
+ 	CheckerPoolOptions     CheckerPoolOptions
++	// AllowNonTsExtensions forces the compiler option of the same name on every
++	// configured project. Inferred projects already set it, because the host owns
++	// their file list and may put a file of any extension in it; a host that drives
++	// a configured project the same way needs the same allowance.
++	AllowNonTsExtensions bool
++	// ResolveModuleName lets the host resolve a module specifier itself. It is
++	// asked before the compiler resolves, and a `handled` of false means the host
++	// has no opinion about this specifier. Nil when the host does not resolve.
++	ResolveModuleName func(moduleName string, containingFile string, resolutionMode core.ResolutionMode) (answer *module.HostModuleResolution, handled bool)
+ }
+ 
+ type SessionInit struct {
+@@ -1236,21 +1250,11 @@ func (s *Session) updateSnapshotRef(ctx context.Context, overlays map[tspath.Pat
+ }
+ 
+ func (s *Session) updateSnapshot(ctx context.Context, overlays map[tspath.Path]*Overlay, change SnapshotChange, callerRef bool) *Snapshot {
+-	s.snapshotMu.Lock()
+-	oldSnapshot := s.snapshot
+-	newSnapshot := oldSnapshot.Clone(ctx, change, overlays, s)
+-	s.snapshot = newSnapshot
+-	if callerRef {
+-		newSnapshot.ref()
+-	}
+-	if newSnapshot != oldSnapshot {
+-		// Release the session's reference to the old snapshot. The new snapshot's
+-		// clone ref (1) is transferred to become the session's ref for its current
+-		// snapshot. Other holders (e.g. active handlers) keep the old snapshot alive
+-		// via their own refs until they complete.
+-		oldSnapshot.Deref(s)
+-	}
+-	s.snapshotMu.Unlock()
++	oldSnapshot, newSnapshot := s.swapSnapshot(ctx, overlays, change, callerRef)
++
++	// the programs this snapshot needed have been built, so the trees offered for them
++	// to find are no longer being held for anything — see releaseOfferedFiles
++	s.releaseOfferedFiles()
+ 
+ 	// Enqueue ATA updates if needed
+ 	if s.typingsInstaller != nil && !s.Config().IsATADisabled() {
+@@ -1279,6 +1283,34 @@ func (s *Session) updateSnapshot(ctx context.Context, overlays map[tspath.Path]*
+ 	return newSnapshot
+ }
+ 
++// swapSnapshot clones the current snapshot under snapshotMu and installs the
++// result, returning the old and new snapshots.
++//
++// It exists so the unlock can be deferred without holding the lock across the
++// background work updateSnapshot queues afterwards. Cloning parses files, which
++// can panic — a failing filesystem callback, for instance — and an unlock that
++// only runs on the success path would leave snapshotMu held forever, deadlocking
++// every later request even though the panic itself was recovered.
++func (s *Session) swapSnapshot(ctx context.Context, overlays map[tspath.Path]*Overlay, change SnapshotChange, callerRef bool) (oldSnapshot, newSnapshot *Snapshot) {
++	s.snapshotMu.Lock()
++	defer s.snapshotMu.Unlock()
++
++	oldSnapshot = s.snapshot
++	newSnapshot = oldSnapshot.Clone(ctx, change, overlays, s)
++	s.snapshot = newSnapshot
++	if callerRef {
++		newSnapshot.ref()
++	}
++	if newSnapshot != oldSnapshot {
++		// Release the session's reference to the old snapshot. The new snapshot's
++		// clone ref (1) is transferred to become the session's ref for its current
++		// snapshot. Other holders (e.g. active handlers) keep the old snapshot alive
++		// via their own refs until they complete.
++		oldSnapshot.Deref(s)
++	}
++	return oldSnapshot, newSnapshot
++}
++
+ // WaitForBackgroundTasks waits for all background tasks to complete.
+ // This is intended to be used only for testing purposes.
+ func (s *Session) WaitForBackgroundTasks() {
+@@ -1453,6 +1485,7 @@ func (s *Session) Close() {
+ 	s.cancelIdleCacheClean()
+ 	// Cancel periodic performance telemetry
+ 	s.stopPerformanceTelemetry()
++	s.releaseOfferedFiles()
+ 	s.backgroundQueue.Close()
+ }
+ 

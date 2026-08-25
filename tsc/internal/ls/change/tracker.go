@@ -111,7 +111,13 @@ type deletedNode struct {
 
 func NewTracker(ctx context.Context, compilerOptions *core.CompilerOptions, formatOptions lsutil.FormatCodeSettings, converters *lsconv.Converters) *Tracker {
 	emitContext := printer.NewEmitContext()
-	newLine := compilerOptions.NewLine.GetNewLineCharacter()
+	// The caller's formatting settings win over the compiler options, the way
+	// TypeScript's getNewLineOrDefaultFromHost does. The LSP path leaves this
+	// unset, so it still gets the compiler option.
+	newLine := formatOptions.NewLineCharacter
+	if newLine == "" {
+		newLine = compilerOptions.NewLine.GetNewLineCharacter()
+	}
 	ctx = format.WithFormatCodeSettings(ctx, formatOptions, newLine) // !!! formatSettings in context?
 	return &Tracker{
 		EmitContext:                emitContext,

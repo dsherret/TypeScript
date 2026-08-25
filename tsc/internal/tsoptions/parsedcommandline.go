@@ -104,6 +104,52 @@ func (p *ParsedCommandLine) WithFileNames(fileNames []string) *ParsedCommandLine
 	}
 }
 
+// WithAdditionalRootFiles returns the command line with fileNames appended to its root
+// file list, keeping everything the config parse produced — the config source file, its
+// diagnostics, the raw object — so a program built from it reports the same things a
+// program built from the config alone would.
+//
+// It is how a client names root files for a project itself rather than through its
+// config: the names are taken verbatim, so nothing about them passes through the
+// include globs or the extension priority that decides what a wildcard matches.
+func (p *ParsedCommandLine) WithAdditionalRootFiles(fileNames []string) *ParsedCommandLine {
+	if len(fileNames) == 0 {
+		return p
+	}
+	parsedConfig := *p.ParsedConfig
+	parsedConfig.FileNames = slices.Concat(p.ParsedConfig.FileNames, fileNames)
+	// The config's `files` list being empty is no longer true of this command line —
+	// naming roots for the project directly is how it is filled — so the complaint that
+	// it is empty goes with it. Left in, it would also stop a project with noEmitOnError
+	// from ever emitting, since that reports whatever the config parse produced.
+	// Everything else the parse reported is about the options or the config file itself
+	// and still holds. The list is rebuilt rather than reused for one more reason: the
+	// command line this one derives from goes on using its own, and
+	// CommonSourceDirectory appends to whichever of the two it is asked of.
+	errors := make([]*ast.Diagnostic, 0, len(p.Errors))
+	for _, err := range p.Errors {
+		if err.Code() != diagnostics.The_files_list_in_config_file_0_is_empty.Code() {
+			errors = append(errors, err)
+		}
+	}
+	// built field by field rather than copied, because the type holds sync.Once memos
+	// that a copy would carry over already fired
+	return &ParsedCommandLine{
+		ParsedConfig:        &parsedConfig,
+		ConfigFile:          p.ConfigFile,
+		Errors:              errors,
+		Raw:                 p.Raw,
+		CompileOnSave:       p.CompileOnSave,
+		comparePathsOptions: p.comparePathsOptions,
+		wildcardDirectories: p.wildcardDirectories,
+		includeGlobs:        p.includeGlobs,
+		extraFileExtensions: p.extraFileExtensions,
+		// the added names go on the end, so the files the config named literally are
+		// still the front of the list
+		literalFileNamesLen: p.literalFileNamesLen,
+	}
+}
+
 type SourceOutputAndProjectReference struct {
 	Source    string
 	OutputDts string

@@ -23029,6 +23029,15 @@ func (c *Checker) getTypeFromTypeNodeWorker(node *ast.Node) *Type {
 		return c.getTypeFromInferTypeNode(node)
 	case ast.KindImportType:
 		return c.getTypeFromImportTypeNode(node)
+	case ast.KindIdentifier, ast.KindQualifiedName, ast.KindPropertyAccessExpression:
+		// These are not TypeNodes, but isPartOfTypeNode reports true for one written
+		// in type position — the `I` of `let v: I`, or either half of `N.I` — and
+		// getTypeOfNode routes those here. Resolve them through the symbol they name.
+		symbol := c.getSymbolAtLocation(node, false /*ignoreErrors*/)
+		if symbol != nil {
+			return c.getDeclaredTypeOfSymbol(symbol)
+		}
+		return c.errorType
 	default:
 		return c.errorType
 	}

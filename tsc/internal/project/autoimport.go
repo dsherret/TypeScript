@@ -69,6 +69,7 @@ type autoImportRegistryCloneHost struct {
 	parseCache        *ParseCache
 	fs                *sourceFS
 	currentDirectory  string
+	resolveModuleName func(moduleName string, containingFile string, resolutionMode core.ResolutionMode) (*module.HostModuleResolution, bool)
 
 	filesMu sync.Mutex
 	files   []ParseCacheKey
@@ -82,13 +83,31 @@ func newAutoImportRegistryCloneHost(
 	snapshotFSBuilder *snapshotFSBuilder,
 	currentDirectory string,
 	toPath func(fileName string) tspath.Path,
+	resolveModuleName func(moduleName string, containingFile string, resolutionMode core.ResolutionMode) (*module.HostModuleResolution, bool),
 ) *autoImportRegistryCloneHost {
 	return &autoImportRegistryCloneHost{
 		projectCollection: projectCollection,
 		parseCache:        parseCache,
 		fs:                newSourceFS(false, &autoImportBuilderFS{snapshotFSBuilder: snapshotFSBuilder}, toPath),
 		currentDirectory:  currentDirectory,
+		resolveModuleName: resolveModuleName,
 	}
+}
+
+// ResolveModuleNameFromHost implements module.ModuleNameResolutionHook.
+//
+// Auto-import builds its own resolvers, so without this it would resolve by the
+// compiler's rules while the program resolves by the host's — and offer imports
+// that do not mean what the program thinks they mean.
+func (a *autoImportRegistryCloneHost) ResolveModuleNameFromHost(
+	moduleName string,
+	containingFile string,
+	resolutionMode core.ResolutionMode,
+) (*module.HostModuleResolution, bool) {
+	if a.resolveModuleName == nil {
+		return nil, false
+	}
+	return a.resolveModuleName(moduleName, containingFile, resolutionMode)
 }
 
 // FS implements autoimport.RegistryCloneHost.

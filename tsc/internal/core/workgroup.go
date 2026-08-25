@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 
@@ -24,9 +26,24 @@ func NewWorkGroup(singleThreaded bool) WorkGroup {
 	return &parallelWorkGroup{}
 }
 
+// WorkerPanic carries a panic value recovered from a work group goroutine so it
+// can be re-raised on the goroutine that called RunAndWait.
+type WorkerPanic struct {
+	// Value is the value the worker passed to panic.
+	Value any
+	// Stack is the worker goroutine's stack at the point of the panic.
+	Stack []byte
+}
+
+func (p *WorkerPanic) String() string {
+	return fmt.Sprintf("panic on work group goroutine: %v\n%s", p.Value, p.Stack)
+}
+
 type parallelWorkGroup struct {
-	done atomic.Bool
-	wg   sync.WaitGroup
+	done      atomic.Bool
+	wg        sync.WaitGroup
+	panicOnce sync.Once
+	panicked  *WorkerPanic
 }
 
 var _ WorkGroup = (*parallelWorkGroup)(nil)
@@ -37,6 +54,19 @@ func (w *parallelWorkGroup) Queue(fn func()) {
 	}
 
 	w.wg.Go(func() {
+		// A panic here cannot be seen by whoever called RunAndWait: it is on a
+		// different goroutine, so an unrecovered one aborts the entire runtime.
+		// That is fatal for the WebAssembly build, where the module is then
+		// permanently unusable. Capture the panic and re-raise it in RunAndWait,
+		// where the caller's recover can turn it into a failed request.
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				w.panicOnce.Do(func() {
+					w.panicked = &WorkerPanic{Value: r, Stack: stack}
+				})
+			}
+		}()
 		fn()
 	})
 }
@@ -44,6 +74,9 @@ func (w *parallelWorkGroup) Queue(fn func()) {
 func (w *parallelWorkGroup) RunAndWait() {
 	defer w.done.Store(true)
 	w.wg.Wait()
+	if w.panicked != nil {
+		panic(w.panicked)
+	}
 }
 
 type singleThreadedWorkGroup struct {

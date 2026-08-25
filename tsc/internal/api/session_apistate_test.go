@@ -244,7 +244,9 @@ func TestUpdateSnapshotResponseSkipsUnloadedAncestorProject(t *testing.T) {
 		switch project.ConfigFileName {
 		case nestedConfigFileName:
 			foundNestedProject = true
-			assert.Assert(t, project.RootFiles != nil)
+			rootFiles, err := session.handleGetProjectRootFiles(context.Background(), &GetProjectDiagnosticsParams{Snapshot: response.Snapshot, Project: project.Id})
+			assert.NilError(t, err)
+			assert.Assert(t, rootFiles != nil)
 			assert.Assert(t, project.CompilerOptions != nil)
 		case ancestorConfigFileName:
 			foundAncestorProject = true

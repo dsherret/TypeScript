@@ -123,7 +123,7 @@ func TestUpdateTemporarySnapshotAddsUnopenedFile(t *testing.T) {
 	})
 	assert.NilError(t, err)
 	assert.Equal(t, len(baseResp.Projects), 1)
-	assert.Assert(t, !slices.Contains(baseResp.Projects[0].RootFiles, temporaryFileName))
+	assert.Assert(t, !slices.Contains(rootFilesOf(t, session, baseResp), temporaryFileName))
 
 	tempResp, err := session.handleUpdateTemporarySnapshot(ctx, &UpdateTemporarySnapshotParams{
 		Snapshot: baseResp.Snapshot,
@@ -132,8 +132,8 @@ func TestUpdateTemporarySnapshotAddsUnopenedFile(t *testing.T) {
 	})
 	assert.NilError(t, err)
 	assert.Equal(t, len(tempResp.Projects), 1)
-	assert.Assert(t, slices.Contains(tempResp.Projects[0].RootFiles, temporaryFileName), "temporary file should be included in the configured project")
-	assert.Assert(t, !slices.Contains(baseResp.Projects[0].RootFiles, temporaryFileName), "base snapshot should remain unchanged")
+	assert.Assert(t, slices.Contains(rootFilesOf(t, session, tempResp), temporaryFileName), "temporary file should be included in the configured project")
+	assert.Assert(t, !slices.Contains(rootFilesOf(t, session, baseResp), temporaryFileName), "base snapshot should remain unchanged")
 
 	_, err = session.handleRelease(ctx, &ReleaseParams{Snapshot: tempResp.Snapshot})
 	assert.NilError(t, err)
@@ -195,8 +195,20 @@ func TestUpdateTemporarySnapshotUsesClientSnapshotAsBase(t *testing.T) {
 	})
 	assert.NilError(t, err)
 	assert.Equal(t, len(tempResp.Projects), 1)
-	assert.Assert(t, !slices.Contains(tempResp.Projects[0].RootFiles, laterFileName), "temporary snapshot should not include files opened after the client snapshot")
+	assert.Assert(t, !slices.Contains(rootFilesOf(t, session, tempResp), laterFileName), "temporary snapshot should not include files opened after the client snapshot")
 
 	_, err = session.handleRelease(ctx, &ReleaseParams{Snapshot: tempResp.Snapshot})
 	assert.NilError(t, err)
+}
+
+// rootFilesOf returns the root files of the single project a snapshot response
+// describes. A project's description does not carry them — see NewProjectResponse.
+func rootFilesOf(t *testing.T, session *Session, response *UpdateSnapshotResponse) []string {
+	t.Helper()
+	rootFiles, err := session.handleGetProjectRootFiles(context.Background(), &GetProjectDiagnosticsParams{
+		Snapshot: response.Snapshot,
+		Project:  response.Projects[0].Id,
+	})
+	assert.NilError(t, err)
+	return rootFiles
 }

@@ -76,7 +76,7 @@ func getImportCodeActions(ctx context.Context, fixContext *CodeFixContext) ([]*C
 			ctx,
 			fixContext.SourceFile,
 			fixContext.Program.Options(),
-			fixContext.LS.FormatOptions(),
+			fixContext.FormatCodeSettings(),
 			fixContext.LS.converters,
 			fixContext.LS.UserPreferences(),
 		)
@@ -128,7 +128,7 @@ func getAllImportCodeActions(ctx context.Context, fixContext *CodeFixContext) (*
 		ch,
 		fixContext.SourceFile,
 		view,
-		fixContext.LS.FormatOptions(),
+		fixContext.FormatCodeSettings(),
 		fixContext.LS.converters,
 		fixContext.LS.UserPreferences(),
 	)

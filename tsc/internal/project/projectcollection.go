@@ -50,17 +50,27 @@ type APIState struct {
 	// keyed by file path. Files with no configured project are loaded into the
 	// inferred project.
 	openFiles map[tspath.Path]apiOpenedFile
+	// rootFiles are the root file names API clients named for a project directly
+	// rather than through its config, in the order they were added, keyed by config
+	// file path. They are appended to whatever the project's config resolved.
+	//
+	// A list here is shared with every snapshot behind this one, so it is replaced
+	// rather than appended to.
+	rootFiles map[tspath.Path][]string
 }
 
 func (s APIState) clone() APIState {
 	return APIState{
 		openProjects: maps.Clone(s.openProjects),
 		openFiles:    maps.Clone(s.openFiles),
+		rootFiles:    maps.Clone(s.rootFiles),
 	}
 }
 
 func (s APIState) equals(other APIState) bool {
-	return maps.Equal(s.openProjects, other.openProjects) && maps.Equal(s.openFiles, other.openFiles)
+	return maps.Equal(s.openProjects, other.openProjects) &&
+		maps.Equal(s.openFiles, other.openFiles) &&
+		maps.EqualFunc(s.rootFiles, other.rootFiles, slices.Equal)
 }
 
 // apiOpenedFile tracks a file kept open by API clients along with its ref count.

@@ -1,0 +1,217 @@
+diff a/packages/typescript/src/api/proto.ts b/packages/typescript/src/api/proto.ts	(rejected hunks)
+@@ -1,5 +1,6 @@
+ import type { CheckFlags } from "#enums/checkFlags";
+ import type { CompletionItemKind } from "#enums/completionItemKind";
++import type { DiagnosticCategory } from "#enums/diagnosticCategory";
+ import type { ModuleKind } from "#enums/moduleKind";
+ import type {
+     __String,
+@@ -41,6 +42,61 @@ export interface TextEdit {
+     newText: string;
+ }
+ 
++/** Edits grouped by the file they apply to. */
++export interface FileTextEdits {
++    fileName: string;
++    edits: TextEdit[];
++}
++
++/** A quick fix: a description plus the edits that apply it. */
++export interface CodeFixAction {
++    description: string;
++    changes: FileTextEdits[];
++}
++
++/**
++ * The result of applying one fix id across a whole file: a description plus the
++ * edits that apply it everywhere it is needed.
++ */
++export interface CombinedCodeActions {
++    description: string;
++    changes: FileTextEdits[];
++}
++
++/** A span of a file, in character offsets. */
++export interface FileSpan {
++    fileName: string;
++    pos: number;
++    end: number;
++}
++
++/** Formatter settings. Unset fields fall back to the server's defaults. */
++export interface FormattingOptions {
++    tabSize?: number;
++    insertSpaces?: boolean;
++    trimTrailingWhitespace?: boolean;
++    /** The indentation step. Defaults to `tabSize`. */
++    indentSize?: number;
++    /** How new lines are indented: 0 none, 1 block, 2 smart. */
++    indentStyle?: number;
++    /** The line ending inserted text is written with. */
++    newLineCharacter?: string;
++}
++
++/**
++ * Which import transformations {@link Project.organizeImports} applies.
++ * - `"all"` sorts, combines, and removes unused imports.
++ * - `"sortAndCombine"` sorts and combines, keeping unused imports.
++ * - `"removeUnused"` only removes unused imports.
++ */
++export type OrganizeImportsMode = "all" | "sortAndCombine" | "removeUnused";
++
++/**
++ * The quotes a code fix writes a new string literal with.
++ * - `"auto"` infers them from the string literals already in the file.
++ */
++export type QuotePreference = "auto" | "double" | "single";
++
+ export interface ImportSymbolActionRequest {
+     kind: "importSymbol";
+     symbol: number;
+@@ -79,6 +135,11 @@ export interface InitializeResponse {
+     useCaseSensitiveFileNames: boolean;
+     /** The server's current working directory */
+     currentDirectory: string;
++    /**
++     * The compiler's own version, e.g. "7.1.0-dev". Not the version of any npm
++     * package wrapping it.
++     */
++    version: string;
+ }
+ 
+ export interface TypeAcquisition {
+@@ -97,12 +158,40 @@ export interface ProjectReference {
+     circular?: boolean;
+ }
+ 
+-export interface ParsedCommandLine {
++/**
++ * A config as a project reports it: everything a `ParsedCommandLine` holds except
++ * the root file list, which a project's description leaves off — see
++ * `ProjectResponse`.
++ */
++export interface ProjectConfig {
+     options: CompilerOptions;
+-    fileNames: string[];
+     projectReferences?: ProjectReference[];
+     typeAcquisition?: TypeAcquisition;
+     compileOnSave?: boolean;
++    /** Diagnostics produced while parsing the config file. */
++    errors?: ProtoDiagnostic[];
++}
++
++export interface ParsedCommandLine extends ProjectConfig {
++    fileNames: string[];
++}
++
++/**
++ * A diagnostic as it appears on the wire. Structurally the same as the
++ * `Diagnostic` the sync and async APIs expose, declared here so the protocol
++ * types do not depend on either of them.
++ */
++export interface ProtoDiagnostic {
++    readonly fileName?: string;
++    readonly pos: number;
++    readonly end: number;
++    readonly code: number;
++    readonly category: DiagnosticCategory;
++    readonly text: string;
++    readonly reportsUnnecessary?: boolean;
++    readonly reportsDeprecated?: boolean;
++    readonly messageChain?: readonly ProtoDiagnostic[];
++    readonly relatedInformation?: readonly ProtoDiagnostic[];
+ }
+ 
+ export interface LSPUpdateSnapshotParams {
+@@ -147,11 +236,33 @@ export interface FileChangeSummary {
+ 
+ export type FileChanges = FileChangeSummary | { invalidateAll: true; };
+ 
++/**
++ * Root files a client names for a project itself, rather than through its config.
++ *
++ * They are appended to whatever the project's config resolved, in the order they are
++ * added, and persist across snapshots until the project is closed. Nothing about them
++ * passes through the config's include globs, so a file named here is in the project
++ * whatever else shares its stem.
++ */
++export interface ProjectRootFileChanges {
++    /** The project, named by the config file it was opened with. */
++    project: DocumentIdentifier;
++    /** Root files to append, in the order they should be appended. */
++    added?: string[];
++    /** Root files to drop. */
++    removed?: string[];
++}
++
+ /**
+  * Parameters for updateSnapshot.
+  */
+ export interface UpdateSnapshotParams extends LSPUpdateSnapshotParams {
+     fileChanges?: FileChanges;
++    /**
++     * Root files to add to or drop from projects, applied in the same snapshot as
++     * {@link fileChanges} so a file's contents and its membership arrive together.
++     */
++    rootFileChanges?: ProjectRootFileChanges[];
+ }
+ 
+ /**
+@@ -220,11 +331,15 @@ export interface UpdateSnapshotResponse {
+ export interface ProjectResponse {
+     id: Path;
+     configFileName: string;
+-    parsedCommandLine: ParsedCommandLine;
++    /**
++     * The project's config, without its root file list: the list is as long as the
++     * project and a snapshot describes every project it holds, so carrying it here
++     * would make every edit cost time proportional to the size of the project. It
++     * is fetched with `getProjectRootFiles` when something asks for it.
++     */
++    parsedCommandLine: ProjectConfig;
+     /** @deprecated Use `parsedCommandLine.options`. */
+     compilerOptions: CompilerOptions;
+-    /** @deprecated Use `parsedCommandLine.fileNames`. */
+-    rootFiles: string[];
+ }
+ 
+ export interface SourceFileResponse {
+@@ -232,6 +347,20 @@ export interface SourceFileResponse {
+     data: string;
+ }
+ 
++/**
++ * Which parse of a file a program is holding, without the file.
++ *
++ * The two fields a {@link SourceFileResponse} leads with, answered on their own. A
++ * client already holding a tree for the path asks for this instead of the file, and
++ * reuses its own copy when they match — see `SourceFileCache#retainMatching`.
++ */
++export interface SourceFileIdentity {
++    /** The 128-bit content hash as a hex string. */
++    contentHash: string;
++    /** The per-file parse options key, as a decimal string. */
++    parseOptionsKey: string;
++}
++
+ export interface SourceFileMetadata {
+     isDefaultLibrary: boolean;
+     isFromExternalLibrary: boolean;
+@@ -257,6 +386,17 @@ export interface SymbolResponse {
+     exportSymbol?: number;
+ }
+ 
++/**
++ * One exported name together with the declarations of the symbol it is exported on.
++ *
++ * The declarations are the symbol's own: an export specifier or an import is reported
++ * as itself, not as whatever it names.
++ */
++export interface ExportedSymbolResponse {
++    name: __String;
++    declarations?: string[];
++}
++
+ export interface TypeResponse {
+     id: number;
+     flags: number;

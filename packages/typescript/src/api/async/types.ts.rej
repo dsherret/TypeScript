@@ -1,0 +1,24 @@
+diff a/packages/typescript/src/api/async/types.ts b/packages/typescript/src/api/async/types.ts	(rejected hunks)
+@@ -390,6 +390,8 @@ export interface Diagnostic {
+ export interface EmitOutputFile {
+     readonly text: string;
+     readonly sourceFileName?: string | undefined;
++    /** Whether the file is to be written with a UTF-8 byte order mark; `text` is reported without it. */
++    readonly writeByteOrderMark?: boolean | undefined;
+ }
+ 
+ export interface EmitResult {
+@@ -415,3 +417,13 @@ export type ImportAdderAction = ImportSymbolAction;
+ export interface GetImportEditsForSymbolsOptions {
+     readonly isValidTypeOnlyUseSite?: boolean;
+ }
++
++export interface RenameOptions {
++    /**
++     * Overrides the providePrefixAndSuffixTextForRename user preference. When
++     * false, a shorthand property assignment, binding element, or import/export
++     * specifier is renamed outright rather than being given the old name as an
++     * alias.
++     */
++    readonly useAliasesForRename?: boolean;
++}

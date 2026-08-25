@@ -39,6 +39,25 @@ func (d *processingDiagnostic) asIncludeExplainingDiagnostic() *includeExplainin
 	return d.data.(*includeExplainingDiagnostic)
 }
 
+// mentionsAnyOf reports whether this diagnostic is about one of the given files or was
+// produced by something one of them says. A program built by leaving those files out
+// carries the parse's diagnostics forward rather than producing them again, so one that
+// mentions a file that is going has to be a reason to build the program instead.
+func (d *processingDiagnostic) mentionsAnyOf(removed *removedRoots) bool {
+	mentions := func(reason *FileIncludeReason) bool {
+		return reason.isReferencedFile() && removed.hasPath(reason.asReferencedFileData().file)
+	}
+	switch d.kind {
+	case processingDiagnosticKindUnknownReference:
+		return mentions(d.asFileIncludeReason())
+	case processingDiagnosticKindExplainingFileInclude:
+		data := d.asIncludeExplainingDiagnostic()
+		return removed.hasPath(data.file) || data.diagnosticReason != nil && mentions(data.diagnosticReason)
+	default:
+		panic("unknown processingDiagnosticKind")
+	}
+}
+
 func (d *processingDiagnostic) toDiagnostic(program *Program) *ast.Diagnostic {
 	switch d.kind {
 	case processingDiagnosticKindUnknownReference:

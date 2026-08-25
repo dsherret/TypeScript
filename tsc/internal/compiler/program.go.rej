@@ -1,0 +1,21 @@
+diff a/tsc/internal/compiler/program.go b/tsc/internal/compiler/program.go	(rejected hunks)
+@@ -318,12 +335,19 @@ func (p *Program) UpdateProgram(changedFilePath tspath.Path, newHost CompilerHos
+ 	// TODO: reverify compiler options when config has changed?
+ 	result := &Program{
+ 		opts:                        newOpts,
++		id:                          newProgramID(),
++		derivedFrom:                 p.id,
+ 		comparePathsOptions:         p.comparePathsOptions,
+ 		processedFiles:              p.processedFiles,
+ 		usesUriStyleNodeCoreModules: p.usesUriStyleNodeCoreModules,
+ 		programDiagnostics:          p.programDiagnostics,
+ 		hasEmitBlockingDiagnostics:  p.hasEmitBlockingDiagnostics,
+ 	}
++	// the one file below is the whole difference between the two programs, and the
++	// host answers with the file it already holds when the text did not change
++	if oldFile != newFile {
++		result.changedPaths = []tspath.Path{newFile.Path()}
++	}
+ 	result.unresolvedImports.tryReuse(&p.unresolvedImports)
+ 	result.knownSymlinks.tryReuse(&p.knownSymlinks)
+ 	result.packageNames.tryReuse(&p.packageNames)

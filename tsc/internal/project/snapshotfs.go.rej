@@ -1,0 +1,27 @@
+diff a/tsc/internal/project/snapshotfs.go b/tsc/internal/project/snapshotfs.go	(rejected hunks)
+@@ -598,15 +598,17 @@ func (s *snapshotFSBuilder) isRelevantFileName(uri lsproto.DocumentUri) bool {
+ 	if _, ok := s.overlays[path]; ok {
+ 		return true
+ 	}
+-	i := strings.LastIndexByte(string(path), '.')
+-	if i < 0 {
+-		return false
+-	}
+-	switch string(path)[i:] {
+-	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".json":
+-		return true
++	if i := strings.LastIndexByte(string(path), '.'); i >= 0 {
++		switch strings.ToLower(string(path)[i:]) {
++		case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".json":
++			return true
++		}
+ 	}
+-	return false
++	// A file already read into the snapshot is relevant whatever its name says: a
++	// host that names the project's files itself can put any extension, or none,
++	// in the program, and a change to one of those still has to invalidate it.
++	_, ok := s.diskFiles.Load(path)
++	return ok
+ }
+ 
+ // expandAndFilterWatchEvents expands directory deletion URIs into individual

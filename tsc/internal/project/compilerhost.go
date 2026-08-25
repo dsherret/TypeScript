@@ -87,6 +87,20 @@ func (c *compilerHost) GetCurrentDirectory() string {
 	return c.currentDirectory
 }
 
+// ResolveModuleNameFromHost implements module.ModuleNameResolutionHook, passing
+// the question to whatever the session was opened with. A session with no
+// resolver never handles one, which is the same as not implementing this at all.
+func (c *compilerHost) ResolveModuleNameFromHost(
+	moduleName string,
+	containingFile string,
+	resolutionMode core.ResolutionMode,
+) (*module.HostModuleResolution, bool) {
+	if c.sessionOptions.ResolveModuleName == nil {
+		return nil, false
+	}
+	return c.sessionOptions.ResolveModuleName(moduleName, containingFile, resolutionMode)
+}
+
 // GetResolvedProjectReference implements compiler.CompilerHost.
 func (c *compilerHost) GetResolvedProjectReference(fileName string, path tspath.Path) *tsoptions.ParsedCommandLine {
 	if c.builder == nil {

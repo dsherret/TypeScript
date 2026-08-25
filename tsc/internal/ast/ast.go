@@ -2521,7 +2521,16 @@ type SourceFile struct {
 
 	// Fields set by language service
 
-	Hash             xxh3.Uint128
+	Hash xxh3.Uint128
+	// hostCacheEntry is whatever the host that parsed this file files it under, kept
+	// here so a host counting a program's files reaches each file's entry directly
+	// rather than looking it up by an identity it would have to rebuild and hash —
+	// once per file, on every snapshot. It is opaque here: only the host that set it
+	// knows what it is, and nothing in the compiler reads it.
+	//
+	// It is written once, while the file is still private to the host that parsed it,
+	// and never again, so it needs no synchronization.
+	hostCacheEntry   any
 	tokenCacheMu     sync.Mutex
 	tokenCache       map[TokenCacheKey]*Node
 	tokenFactory     *NodeFactory
@@ -2551,6 +2560,19 @@ func (f *NodeFactory) NewSourceFile(opts SourceFileParseOptions, text string, st
 
 func (node *SourceFile) ParseOptions() SourceFileParseOptions {
 	return node.parseOptions
+}
+
+// HostCacheEntry returns what the host filed this file under, or nil if it set nothing.
+func (node *SourceFile) HostCacheEntry() any {
+	return node.hostCacheEntry
+}
+
+// SetHostCacheEntry records what the host files this file under.
+//
+// It must be called before the file is shared with anything else — see the field's
+// comment — which for a parsing cache means before the parse is handed back.
+func (node *SourceFile) SetHostCacheEntry(entry any) {
+	node.hostCacheEntry = entry
 }
 
 func (node *SourceFile) Text() string {

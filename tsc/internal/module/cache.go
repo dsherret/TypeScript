@@ -51,6 +51,15 @@ func (c *typeRefDirectiveResolutionCache) Set(key typeRefDirectiveResolutionCach
 
 type caches struct {
 	packageJsonInfoCache *packagejson.InfoCache
+	// packageScopeCache memoizes getPackageScopeForPath, which is asked once per
+	// file in a program for the directory that file sits in. The answer is the
+	// nearest package.json at or above that directory, so it is the same for every
+	// file in a directory and changes only when the file system does; without this
+	// each file walks its ancestors and builds a "<dir>/package.json" path to look
+	// up, which for a flat project of n files is n path joins to reach one answer.
+	// A nil entry is cached as such: "no package.json above here" costs the same
+	// walk to establish.
+	packageScopeCache collections.SyncMap[string, *packagejson.InfoCacheEntry]
 
 	moduleResolutionCache           moduleResolutionCache
 	typeRefDirectiveResolutionCache typeRefDirectiveResolutionCache

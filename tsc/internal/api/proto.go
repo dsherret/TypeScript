@@ -231,6 +231,9 @@ type InitializeResponse struct {
 	UseCaseSensitiveFileNames bool `json:"useCaseSensitiveFileNames"`
 	// CurrentDirectory is the server's current working directory.
 	CurrentDirectory string `json:"currentDirectory"`
+	// Version is the compiler's own version, e.g. "7.1.0-dev". Not the version of
+	// any npm package wrapping it.
+	Version string `json:"version"`
 }
 
 // DocumentIdentifier identifies a document by either a file name (plain string) or a URI object.
@@ -357,6 +360,21 @@ type UpdateSnapshotParams struct {
 	// CloseFiles lists files to release in the new snapshot. A file is only fully
 	// closed once every API client that opened it closes it.
 	CloseFiles []DocumentIdentifier `json:"closeFiles,omitempty"`
+	// RootFileChanges lists root files to add to or drop from projects the client
+	// names root files for itself rather than through a config.
+	RootFileChanges []APIProjectRootFileChanges `json:"rootFileChanges,omitempty"`
+}
+
+// APIProjectRootFileChanges names root files for a project directly, rather than
+// through the project's config. They are appended to whatever the config resolved, and
+// persist across snapshots until the project is closed.
+type APIProjectRootFileChanges struct {
+	// Project is the project, named by the config file it was opened with.
+	Project DocumentIdentifier `json:"project"`
+	// Added lists root files to append, in the order they should be appended.
+	Added []string `json:"added,omitempty"`
+	// Removed lists root files to drop.
+	Removed []string `json:"removed,omitempty"`
 }
 
 // UpdateTemporarySnapshotParams are the parameters for creating a temporary
@@ -774,6 +792,27 @@ type SymbolResponse struct {
 	ExportSymbol     SymbolID     `json:"exportSymbol,omitzero"`
 }
 
+// GetExportedSymbolsOfFilesParams asks what a batch of files export. The batch is
+// the point: the answer for one file is a handful of map lookups next to what a
+// request costs, so a caller sweeping a project asks once rather than once a file.
+type GetExportedSymbolsOfFilesParams struct {
+	Snapshot SnapshotID           `json:"snapshot"`
+	Project  ProjectID            `json:"project"`
+	Files    []DocumentIdentifier `json:"files"`
+}
+
+// ExportedSymbolResponse is one exported name together with the declarations of the
+// symbol it is exported on.
+//
+// The declarations are the symbol's own, not the ones a re-export chain leads to:
+// following an export specifier or an import to what it names is the caller's to do,
+// and it is the caller that knows what it wants from the far end.
+type ExportedSymbolResponse struct {
+	// The escaped (`__String`) name the symbol is exported on.
+	Name         string       `json:"name"`
+	Declarations []NodeHandle `json:"declarations,omitempty"`
+}
+
 func symbolHandles(symbols []*ast.Symbol) []SymbolID {
 	if len(symbols) == 0 {
 		return nil
@@ -985,6 +1024,17 @@ type GetSourceFileParams struct {
 type GetSourceFileNamesParams struct {
 	Snapshot SnapshotID `json:"snapshot"`
 	Project  ProjectID  `json:"project"`
+}
+
+// SourceFileIdentity is which parse of a file a program is holding, without the file.
+//
+// The two fields are the header a source file response leads with — see
+// encoder.SourceFileHash and encoder.ParseOptionsKey — and they are what a client's
+// source file cache decides on. A client already holding a tree for the path asks for
+// this instead of the file, and reuses its own copy when they match.
+type SourceFileIdentity struct {
+	ContentHash     string `json:"contentHash"`
+	ParseOptionsKey string `json:"parseOptionsKey"`
 }
 
 // SourceFileMetadata carries program-stored metadata about a single source file.
@@ -1261,6 +1311,145 @@ type TextEdit struct {
 	NewText string `json:"newText"`
 }
 
+// FormattingOptions configures the formatter. Unset fields fall back to the
+// server's configured defaults.
+type FormattingOptions struct {
+	TabSize                *int  `json:"tabSize,omitempty"`
+	InsertSpaces           *bool `json:"insertSpaces,omitempty"`
+	TrimTrailingWhitespace *bool `json:"trimTrailingWhitespace,omitempty"`
+	// The three below are honoured by the formatter but cannot be expressed in an
+	// LSP FormattingOptions, so they are carried separately: IndentSize is the
+	// indentation step (defaulting to TabSize), IndentStyle is lsutil.IndentStyle
+	// (0 none, 1 block, 2 smart), and NewLineCharacter is the line ending inserted
+	// text is written with.
+	IndentSize       *int    `json:"indentSize,omitempty"`
+	IndentStyle      *int    `json:"indentStyle,omitempty"`
+	NewLineCharacter *string `json:"newLineCharacter,omitempty"`
+}
+
+// FormatDocumentParams are the parameters for the formatDocument method.
+type FormatDocumentParams struct {
+	Snapshot SnapshotID         `json:"snapshot"`
+	Project  ProjectID          `json:"project"`
+	File     DocumentIdentifier `json:"file"`
+	Options  *FormattingOptions `json:"options,omitempty"`
+}
+
+// FormatDocumentRangeParams are the parameters for the formatDocumentRange
+// method. Pos and End are character offsets into the file.
+type FormatDocumentRangeParams struct {
+	Snapshot SnapshotID         `json:"snapshot"`
+	Project  ProjectID          `json:"project"`
+	File     DocumentIdentifier `json:"file"`
+	Pos      int                `json:"pos"`
+	End      int                `json:"end"`
+	Options  *FormattingOptions `json:"options,omitempty"`
+}
+
+// OrganizeImportsMode selects which import transformations to apply.
+type OrganizeImportsMode string
+
+const (
+	// OrganizeImportsModeAll sorts, combines, and removes unused imports.
+	OrganizeImportsModeAll OrganizeImportsMode = "all"
+	// OrganizeImportsModeSortAndCombine sorts and combines, keeping unused imports.
+	OrganizeImportsModeSortAndCombine OrganizeImportsMode = "sortAndCombine"
+	// OrganizeImportsModeRemoveUnused only removes unused imports.
+	OrganizeImportsModeRemoveUnused OrganizeImportsMode = "removeUnused"
+)
+
+// FileTextEdits groups edits by the file they apply to.
+type FileTextEdits struct {
+	FileName string      `json:"fileName"`
+	Edits    []*TextEdit `json:"edits"`
+}
+
+// FileSpan is a span of a file, in character offsets.
+type FileSpan struct {
+	FileName string `json:"fileName"`
+	Pos      int    `json:"pos"`
+	End      int    `json:"end"`
+}
+
+// FilePositionParams identify a character offset within a file. They are the
+// parameters for the getDefinition and getImplementations methods.
+type FilePositionParams struct {
+	Snapshot SnapshotID         `json:"snapshot"`
+	Project  ProjectID          `json:"project"`
+	File     DocumentIdentifier `json:"file"`
+	Position int                `json:"position"`
+}
+
+// CodeFixAction is a quick fix: a description plus the edits that apply it.
+type CodeFixAction struct {
+	Description string           `json:"description"`
+	Changes     []*FileTextEdits `json:"changes"`
+}
+
+// GetCodeFixesParams are the parameters for the getCodeFixes method. Pos and End
+// are character offsets; ErrorCodes, when non-empty, restricts the fixes to
+// those addressing the given diagnostic codes.
+type GetCodeFixesParams struct {
+	Snapshot   SnapshotID         `json:"snapshot"`
+	Project    ProjectID          `json:"project"`
+	File       DocumentIdentifier `json:"file"`
+	Pos        int                `json:"pos"`
+	End        int                `json:"end"`
+	ErrorCodes []int              `json:"errorCodes,omitempty"`
+	// QuotePreference decides the quotes a fix writes a new string literal with:
+	// "single", "double", or "auto" to infer them from the file. Empty leaves the
+	// snapshot's preference in place.
+	QuotePreference string `json:"quotePreference,omitempty"`
+}
+
+// GetCombinedCodeFixParams are the parameters for the getCombinedCodeFix
+// method. FixId names the fix to apply across the whole file; the ids that exist
+// today are "fixMissingImport", "fixMissingTypeAnnotationOnExports" and
+// "fixClassIncorrectlyImplementsInterface".
+type GetCombinedCodeFixParams struct {
+	Snapshot SnapshotID         `json:"snapshot"`
+	Project  ProjectID          `json:"project"`
+	File     DocumentIdentifier `json:"file"`
+	FixId    string             `json:"fixId"`
+	// Options formats the text the fix inserts. Unset fields fall back to the
+	// server's defaults, as they do for formatDocument.
+	Options *FormattingOptions `json:"options,omitempty"`
+	// QuotePreference decides the quotes a fix writes a new string literal with:
+	// "single", "double", or "auto" to infer them from the file. Empty leaves the
+	// snapshot's preference in place.
+	QuotePreference string `json:"quotePreference,omitempty"`
+}
+
+// CombinedCodeActions is the result of getCombinedCodeFix: a description plus
+// the edits that apply the fix everywhere it is needed.
+type CombinedCodeActions struct {
+	Description string           `json:"description"`
+	Changes     []*FileTextEdits `json:"changes"`
+}
+
+// RenameParams are the parameters for the rename method. Position is a
+// character offset into the file.
+type RenameParams struct {
+	Snapshot SnapshotID         `json:"snapshot"`
+	Project  ProjectID          `json:"project"`
+	File     DocumentIdentifier `json:"file"`
+	Position int                `json:"position"`
+	NewName  string             `json:"newName"`
+	// UseAliasesForRename overrides the providePrefixAndSuffixTextForRename user
+	// preference. When false, a shorthand property assignment, binding element,
+	// or import/export specifier is renamed outright rather than being given the
+	// old name as an alias. Nil leaves the snapshot's preference in place.
+	UseAliasesForRename *bool `json:"useAliasesForRename,omitempty"`
+}
+
+// OrganizeImportsParams are the parameters for the organizeImports method.
+type OrganizeImportsParams struct {
+	Snapshot SnapshotID          `json:"snapshot"`
+	Project  ProjectID           `json:"project"`
+	File     DocumentIdentifier  `json:"file"`
+	Mode     OrganizeImportsMode `json:"mode,omitempty"`
+}
+
 // TypeToTypeNodeParams are the parameters for the typeToTypeNode method.
 type TypeToTypeNodeParams struct {
 	Snapshot SnapshotID `json:"snapshot"`
@@ -1268,6 +1457,14 @@ type TypeToTypeNodeParams struct {
 	Type     TypeID     `json:"type"`
 	Location NodeHandle `json:"location,omitempty"`
 	Flags    int32      `json:"flags,omitempty"`
+}
+
+// SymbolToStringParams are the parameters for the symbolToString method.
+type SymbolToStringParams struct {
+	Snapshot SnapshotID `json:"snapshot"`
+	Project  ProjectID  `json:"project"`
+	Symbol   SymbolID   `json:"symbol"`
+	Location NodeHandle `json:"location,omitempty"`
 }
 
 // SignatureToSignatureDeclarationParams are the parameters for the signatureToSignatureDeclaration method.
@@ -1282,10 +1479,39 @@ type SignatureToSignatureDeclarationParams struct {
 
 // PrintNodeParams are the parameters for the printNode method.
 type PrintNodeParams struct {
-	Data                          string `json:"data"` // base64-encoded binary AST data
+	Data string `json:"data"` // base64-encoded binary AST data
+	// SourceText is the text of the file the node was parsed from. Comments and
+	// original token text are read out of it, so a node printed without it prints
+	// without its comments.
+	SourceText                    string `json:"sourceText,omitempty"`
+	FileName                      string `json:"fileName,omitempty"` // names the script kind SourceText is parsed as
 	PreserveSourceNewlines        bool   `json:"preserveSourceNewlines,omitempty"`
 	NeverAsciiEscape              bool   `json:"neverAsciiEscape,omitempty"`
 	TerminateUnterminatedLiterals bool   `json:"terminateUnterminatedLiterals,omitempty"`
+	RemoveComments                bool   `json:"removeComments,omitempty"`
+	// NewLine is a core.NewLineKind: 0 leaves the printer's default (LF), 1 emits
+	// CRLF, 2 emits LF. The printer writes the line breaks, so text a line break
+	// is part of — a template literal's, say — is left alone.
+	NewLine uint32 `json:"newLine,omitempty"`
+	// SyntheticComments are comments the client attached to nodes rather than ones
+	// SourceText contains, addressed by the index the node was encoded at.
+	SyntheticComments []*NodeSyntheticComments `json:"syntheticComments,omitempty"`
+}
+
+// NodeSyntheticComments are the comments a client attached to one encoded node.
+type NodeSyntheticComments struct {
+	Node     int                 `json:"node"`
+	Leading  []*SyntheticComment `json:"leading,omitempty"`
+	Trailing []*SyntheticComment `json:"trailing,omitempty"`
+}
+
+// SyntheticComment is a comment carried on a node instead of read from a file.
+type SyntheticComment struct {
+	// Kind is an ast.Kind: SingleLineCommentTrivia or MultiLineCommentTrivia.
+	Kind               int    `json:"kind"`
+	Text               string `json:"text"`
+	HasTrailingNewLine bool   `json:"hasTrailingNewLine,omitempty"`
+	HasLeadingNewline  bool   `json:"hasLeadingNewline,omitempty"`
 }
 
 type EmitParams struct {
@@ -1310,6 +1536,9 @@ type EmitOutputFile struct {
 	FileName       string  `json:"fileName"`
 	Text           string  `json:"text"`
 	SourceFileName *string `json:"sourceFileName,omitempty"`
+	// WriteByteOrderMark reports that the file is to be written with a UTF-8 byte
+	// order mark. Text is reported without it, the way ts.OutputFile did.
+	WriteByteOrderMark bool `json:"writeByteOrderMark,omitempty"`
 }
 
 type EmitOutputResponse struct {
@@ -1355,6 +1584,14 @@ type CheckerNodeParams struct {
 	Snapshot SnapshotID `json:"snapshot"`
 	Project  ProjectID  `json:"project"`
 	Location NodeHandle `json:"location"`
+}
+
+// GetSymbolsInScopeParams are parameters for getSymbolsInScope.
+type GetSymbolsInScopeParams struct {
+	Snapshot SnapshotID `json:"snapshot"`
+	Project  ProjectID  `json:"project"`
+	Location NodeHandle `json:"location"`
+	Meaning  uint32     `json:"meaning"` // SymbolFlags for what kinds of symbol to include
 }
 
 // CheckerSymbolParams are parameters for checker methods that operate on a symbol.

@@ -1,0 +1,23 @@
+diff a/packages/typescript/src/api/async/client.ts b/packages/typescript/src/api/async/client.ts	(rejected hunks)
+@@ -18,6 +18,7 @@ import {
+     type ClientSocketOptions,
+     type ClientSpawnOptions,
+     isSpawnOptions,
++    isWasmOptions,
+     resolveExePath,
+ } from "../options.ts";
+ import {
+@@ -53,7 +54,12 @@ export class Client {
+     async connect(): Promise<void> {
+         if (this.connected) return;
+ 
+-        if (isSpawnOptions(this.options)) {
++        if (isWasmOptions(this.options)) {
++            // The in-process WebAssembly transport is synchronous by nature; use
++            // the sync API for it.
++            throw new Error("The WebAssembly transport is only supported by the sync client");
++        }
++        else if (isSpawnOptions(this.options)) {
+             await this.connectViaSpawn(this.options);
+         }
+         else {

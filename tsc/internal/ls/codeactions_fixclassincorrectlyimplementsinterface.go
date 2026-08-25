@@ -44,7 +44,7 @@ func getCodeActionsToFixClassIncorrectlyImplementsInterface(context context.Cont
 
 	var actions []*CodeAction
 	for _, implementedTypeNode := range implementsTypes {
-		changeTracker := change.NewTracker(context, fixContext.Program.Options(), fixContext.LS.FormatOptions(), fixContext.LS.converters)
+		changeTracker := change.NewTracker(context, fixContext.Program.Options(), fixContext.FormatCodeSettings(), fixContext.LS.converters)
 		importAdder, err := createImportAdder(context, fixContext, typeChecker)
 		if err != nil {
 			return nil, err
@@ -70,7 +70,7 @@ func getAllCodeActionsToFixClassIncorrectlyImplementsInterface(context context.C
 	typeChecker, done := fixContext.Program.GetTypeCheckerForFile(context, fixContext.SourceFile)
 	defer done()
 
-	changeTracker := change.NewTracker(context, fixContext.Program.Options(), fixContext.LS.FormatOptions(), fixContext.LS.converters)
+	changeTracker := change.NewTracker(context, fixContext.Program.Options(), fixContext.FormatCodeSettings(), fixContext.LS.converters)
 	importAdder, err := createImportAdder(context, fixContext, typeChecker)
 	if err != nil {
 		return nil, err
@@ -236,5 +236,5 @@ func createImportAdder(context context.Context, fixContext *CodeFixContext, type
 	if view == nil {
 		return nil, nil
 	}
-	return autoimport.NewImportAdder(context, fixContext.Program, typeChecker, fixContext.SourceFile, view, fixContext.LS.FormatOptions(), fixContext.LS.converters, fixContext.LS.UserPreferences()), nil
+	return autoimport.NewImportAdder(context, fixContext.Program, typeChecker, fixContext.SourceFile, view, fixContext.FormatCodeSettings(), fixContext.LS.converters, fixContext.LS.UserPreferences()), nil
 }
