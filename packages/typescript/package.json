@@ -38,6 +38,10 @@
     "exports": {
         "./package.json": "./package.json",
         ".": "./lib/version.cjs",
+        "./unstable/create": {
+            "@typescript/source": "./src/api/create.ts",
+            "default": "./dist/api/create.js"
+        },
         "./unstable/sync": {
             "@typescript/source": "./src/api/sync/api.ts",
             "default": "./dist/api/sync/api.js"
@@ -84,7 +88,18 @@
         }
     },
     "imports": {
-        "#getExePath": "./lib/getExePath.js",
+        "#getExePath": {
+            "browser": "./lib/getExePath.browser.js",
+            "default": "./lib/getExePath.js"
+        },
+        "#syncChannel": {
+            "@typescript/source": {
+                "browser": "./src/api/syncChannel.browser.ts",
+                "default": "./src/api/syncChannel.ts"
+            },
+            "browser": "./dist/api/syncChannel.browser.js",
+            "default": "./dist/api/syncChannel.js"
+        },
         "#enums/*": {
             "@typescript/source": {
                 "types": "./src/enums/*.enum.ts",

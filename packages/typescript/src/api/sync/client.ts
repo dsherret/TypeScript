@@ -17,7 +17,9 @@ import type {
     APIMethodInfo,
     SourceFileResponseMethod,
 } from "../proto.ts";
-import { SyncRpcChannel } from "../syncChannel.ts";
+// Imported through the conditional "#syncChannel" map (see package.json) so a
+// browser build gets a stub instead of the node:child_process transport.
+import { SyncRpcChannel } from "#syncChannel";
 import {
     combineTimingInfo,
     disabledTimingInfo,

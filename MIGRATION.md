@@ -15,6 +15,32 @@ Five end-to-end smoke tests pass against the built reactor (`packages/typescript
 core parse+check, LS rename+format, checker getAmbientModules, batched
 getExportedSymbolsOfFiles, and parse-without-snapshot.
 
+## Runtime: native when able, Wasm otherwise
+
+`@typescript/native-preview/unstable/create` (`src/api/create.ts`) is a single entry that
+picks the backend for the host:
+
+- **Native** — a spawned `tsc --api` subprocess, when the host can spawn one (Node, Deno,
+  Bun) *and* a native binary exists for its platform. Runs the compiler as Go; markedly
+  faster than Wasm.
+- **Wasm** — the in-process reactor, when it cannot: a browser, or a platform with no
+  published native build.
+
+`createAPI(options)` returns the API; `createAPIWithBackend` also reports which backend it
+chose; `selectBackend` / `isNativeBackendAvailable` expose the decision. `backend: "native"
+| "wasm"` forces one. Native-binary presence is discovered through `getExePath` (it throws
+when no build matches the platform, which is exactly the fall-back-to-Wasm signal).
+
+To keep a browser bundle from statically pulling in `node:child_process` / `node:fs`, the
+two Node-only static imports are gated behind conditional `#`-imports (`package.json`):
+`#getExePath` and `#syncChannel` resolve to browser stubs under the `browser` condition, so
+a browser build carries only the portable reactor path. A browser has no disk to read the
+`.wasm` from, so the host supplies it (`createAPI({ wasm })` or `setDefaultWasmModule`).
+
+Verified by `packages/typescript/test/create-smoke.ts` (native preferred, Wasm forced, and
+Wasm fallback when the binary is absent) and by a `--conditions browser` run that resolves
+the stubs and runs the reactor from supplied bytes.
+
 ## Restored features (were deferred to reach the first build)
 
 - **LS edit exposures** — rename, formatDocument, formatDocumentRange, organizeImports,
