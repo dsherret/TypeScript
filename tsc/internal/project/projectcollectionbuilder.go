@@ -404,7 +404,9 @@ func (b *ProjectCollectionBuilder) refreshContentMapperProjectForChanges(entry d
 	}
 	entry.Change(func(project *Project) {
 		project.dirty = true
-		project.dirtyFilePath = ""
+		project.dirtyFiles = nil
+		project.deletedFiles = nil
+		project.dirtyFilesKnown = false
 		if logger != nil {
 			logger.Logf("Marking project as dirty due to content mapper configuration changes: %s", project.configFilePath)
 		}
@@ -781,7 +783,9 @@ func (b *ProjectCollectionBuilder) DidChangeUserPreferences(oldPreferences, newP
 	b.forEachProject(func(entry dirty.Value[*Project]) bool {
 		entry.Change(func(project *Project) {
 			project.dirty = true
-			project.dirtyFilePath = ""
+			project.dirtyFiles = nil
+			project.deletedFiles = nil
+			project.dirtyFilesKnown = false
 			if logger != nil {
 				logger.Logf("Marking project as dirty due to locale change: %s", project.configFilePath)
 			}

@@ -19,7 +19,6 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/collections"
 	"github.com/microsoft/TypeScript/tsc/internal/contentmapper"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
-	"github.com/microsoft/TypeScript/tsc/internal/module"
 	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
 	"github.com/microsoft/TypeScript/tsc/internal/json"
 	"github.com/microsoft/TypeScript/tsc/internal/locale"
@@ -27,6 +26,7 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsconv"
 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsutil"
 	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
+	"github.com/microsoft/TypeScript/tsc/internal/module"
 	"github.com/microsoft/TypeScript/tsc/internal/project/ata"
 	"github.com/microsoft/TypeScript/tsc/internal/project/background"
 	"github.com/microsoft/TypeScript/tsc/internal/project/logging"
@@ -70,7 +70,7 @@ type SessionOptions struct {
 	// AllowNonTsExtensions lets the host include files with non-TS extensions.
 	AllowNonTsExtensions bool
 	// ResolveModuleName lets the host resolve a module specifier itself. Nil when the host does not resolve.
-	ResolveModuleName func(moduleName string, containingFile string, resolutionMode core.ResolutionMode) (answer *module.HostModuleResolution, handled bool)
+	ResolveModuleName      func(moduleName string, containingFile string, resolutionMode core.ResolutionMode) (answer *module.HostModuleResolution, handled bool)
 	CurrentDirectory       string
 	DefaultLibraryPath     string
 	TypingsLocation        string
@@ -1451,6 +1451,11 @@ func (s *Session) updateSnapshot(ctx context.Context, overlays map[tspath.Path]*
 	s.snapshotMu.Lock()
 	oldSnapshot := s.snapshot
 	newSnapshot := oldSnapshot.Clone(ctx, change, overlays, s)
+	// Building the new snapshot's programs is the parse cache lookup the offered trees
+	// were being held for: each has now either been taken over by a program that holds
+	// its own reference or was keyed for a build that did not come. Either way nothing
+	// else is waiting, so let the offers go.
+	s.releaseOfferedFiles()
 	s.snapshot = newSnapshot
 	if callerRef {
 		newSnapshot.ref()

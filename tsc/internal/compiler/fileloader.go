@@ -631,7 +631,17 @@ func (p *fileLoader) parseSourceFile(t *parseTask) *ast.SourceFile {
 	if tspath.FileExtensionIsOneOf(t.normalizedFilePath, p.contentMapperExtensions) {
 		return p.parseContentMappedFile(parseOptions)
 	}
-	return p.opts.Host.GetSourceFile(parseOptions)
+	file := p.opts.Host.GetSourceFile(parseOptions)
+	if p.base != nil && file != nil {
+		// an incremental walk acquired this file fresh from the host: it is one the
+		// added roots brought in, not one reused from the program being derived. The
+		// caller both validates these against the old program and releases them if it
+		// gives up, so they have to be recorded as this walk's own.
+		p.acquiredMu.Lock()
+		p.acquired = append(p.acquired, file)
+		p.acquiredMu.Unlock()
+	}
+	return file
 }
 
 // parseContentMappedFile produces a content-mapped virtual source file via the host's content
@@ -667,6 +677,15 @@ func (p *fileLoader) parseContentMappedFile(opts ast.SourceFileParseOptions) *as
 			sourceFile.SetDiagnostics(append(sourceFile.Diagnostics(), diagnostic))
 		}
 		return sourceFile
+	}
+	if p.base != nil && files.Canonical != nil {
+		// the same as the plain-parse case above: GetContentMappedSourceFiles acquired
+		// this file in the content-mapped cache, so an incremental walk has to record it
+		// as its own. Only the canonical file is tracked — the supplemental ones share
+		// its cache entry and are skipped by the caller's ref and the snapshot's release.
+		p.acquiredMu.Lock()
+		p.acquired = append(p.acquired, files.Canonical)
+		p.acquiredMu.Unlock()
 	}
 	return files.Canonical
 }

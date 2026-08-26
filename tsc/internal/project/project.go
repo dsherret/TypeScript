@@ -73,7 +73,6 @@ type Project struct {
 	// together with the root file list: a file the program holds may leave it only by
 	// being dropped as a root in the same update, which is what says nothing else was
 	// relying on it. See Project.updateRootFilesInProgram.
-	dirtyFilePath   tspath.Path
 	dirtyFiles      []tspath.Path
 	deletedFiles    []tspath.Path
 	dirtyFilesKnown bool
@@ -456,11 +455,12 @@ func (p *Project) CreateProgram() CreateProgramResult {
 		return newCheckerPool(p.host.sessionOptions.CheckerPoolOptions, program, p.log)
 	}
 
-	// Create the command line, potentially augmented with typing files
-	commandLine := p.getCommandLineWithTypingsFiles()
-	if p.dirtyFilePath != "" && p.Program != nil && p.Program.CommandLine() == commandLine {
+	// Create the command line, augmented with typing files and the root files an API
+	// client named for this project (which are appended past the config's own).
+	commandLine := p.effectiveCommandLine()
+	if p.dirtyFilesKnown && len(p.dirtyFiles) == 1 && len(p.deletedFiles) == 0 && p.Program != nil && p.Program.CommandLine() == commandLine {
 		var dirtyFile *ast.SourceFile
-		newProgram, dirtyFile, programCloned = p.Program.UpdateProgram(p.dirtyFilePath, p.host, createCheckerPool)
+		newProgram, dirtyFile, programCloned = p.Program.UpdateProgram(p.dirtyFiles[0], p.host, createCheckerPool)
 		if programCloned {
 			updateKind = ProgramUpdateKindCloned
 			for _, file := range newProgram.SourceFiles() {
@@ -494,6 +494,11 @@ func (p *Project) CreateProgram() CreateProgramResult {
 				p.host.builder.parseCache.Deref(parseCacheKeyForFile(dirtyFile))
 			}
 		}
+	} else if derived := p.updateRootFilesInProgram(commandLine, createCheckerPool); derived != nil {
+		// roots were added or removed and the program could be derived from the previous
+		// one rather than built again. The file set is known to differ.
+		newProgram = derived
+		fileNamesKnownToDiffer = true
 	} else {
 		var typingsLocation string
 		if p.GetTypeAcquisition().Enable.IsTrue() {
@@ -584,24 +589,48 @@ func (p *Project) updateRootFilesInProgram(
 	}
 	if !ok {
 		for _, file := range acquired {
-			p.host.builder.parseCache.Deref(NewParseCacheKey(file.ParseOptions(), file.Hash, file.ScriptKind))
+			if file.IsContentMapperFailureStub() || file.IsContentMapperSupplemental() {
+				continue
+			}
+			if file.ContentMapper() != "" {
+				p.host.builder.contentMappedParseCache.Deref(contentMappedParseCacheKeyForFile(file))
+			} else {
+				p.host.builder.parseCache.Deref(parseCacheKeyForFile(file))
+			}
 		}
 		return nil
 	}
 
 	// everything the new program did not acquire itself came from the old one, which
-	// keeps its own reference until it is disposed
+	// keeps its own reference until it is disposed. Content-mapped files are held in a
+	// cache of their own and the stub and supplemental files in none, so the ownership
+	// is routed the same way the snapshot that disposes this program will release it.
 	acquiredFiles := make(map[*ast.SourceFile]struct{}, len(acquired))
 	for _, file := range acquired {
 		acquiredFiles[file] = struct{}{}
 	}
 	for _, file := range newProgram.SourceFiles() {
-		if _, isNew := acquiredFiles[file]; !isNew {
-			p.host.builder.parseCache.Ref(NewParseCacheKey(file.ParseOptions(), file.Hash, file.ScriptKind))
+		if _, isNew := acquiredFiles[file]; isNew {
+			continue
+		}
+		if file.IsContentMapperFailureStub() || file.IsContentMapperSupplemental() {
+			continue
+		}
+		if file.ContentMapper() != "" {
+			p.host.builder.contentMappedParseCache.Ref(contentMappedParseCacheKeyForFile(file))
+		} else {
+			p.host.builder.parseCache.Ref(parseCacheKeyForFile(file))
 		}
 	}
 	for _, file := range newProgram.DuplicateSourceFiles() {
-		p.host.builder.parseCache.Ref(NewParseCacheKey(file.ParseOptions, file.Hash, file.ScriptKind))
+		if file.IsContentMapperFailureStub {
+			continue
+		}
+		if file.ContentMapper != "" {
+			p.host.builder.contentMappedParseCache.Ref(contentMappedParseCacheKeyForDuplicate(file))
+		} else {
+			p.host.builder.parseCache.Ref(parseCacheKeyForDuplicate(file))
+		}
 	}
 
 	// the new host has only read what the change needed, and the program depends on

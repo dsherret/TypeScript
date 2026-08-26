@@ -79,8 +79,11 @@ type automaticTypeDirectiveFileData struct {
 	packageId     module.PackageId
 }
 
-func (r *FileIncludeReason) asIndex() int {
-	return r.data.(int)
+// asRootFileName recovers a root file's name. Root reasons carry the name
+// directly (not an index into the config) so the reason stays valid when roots
+// are added or removed incrementally and the config's file list shifts.
+func (r *FileIncludeReason) asRootFileName() string {
+	return r.data.(string)
 }
 
 func (r *FileIncludeReason) asLibFileIndex() (int, bool) {
@@ -175,7 +178,7 @@ func (r *FileIncludeReason) computeDiagnostic(program *Program, toFileName func(
 	case fileIncludeKindRootFile:
 		if program.opts.Config.ConfigFile != nil {
 			config := program.opts.Config
-			fileName := tspath.GetNormalizedAbsolutePath(config.FileNames()[r.asIndex()], program.GetCurrentDirectory())
+			fileName := tspath.GetNormalizedAbsolutePath(r.asRootFileName(), program.GetCurrentDirectory())
 			if matchedFileSpec := config.GetMatchedFileSpec(fileName); matchedFileSpec != "" {
 				return ast.NewCompilerDiagnostic(diagnostics.Part_of_files_list_in_tsconfig_json, matchedFileSpec, toFileName(fileName))
 			} else if matchedIncludeSpec, isDefaultIncludeSpec := config.GetMatchedIncludeSpec(fileName); matchedIncludeSpec != "" {
@@ -270,7 +273,7 @@ func (r *FileIncludeReason) toRelatedInfo(program *Program) *ast.Diagnostic {
 	config := program.opts.Config
 	switch r.kind {
 	case fileIncludeKindRootFile:
-		fileName := tspath.GetNormalizedAbsolutePath(config.FileNames()[r.asIndex()], program.GetCurrentDirectory())
+		fileName := tspath.GetNormalizedAbsolutePath(r.asRootFileName(), program.GetCurrentDirectory())
 		if matchedFileSpec := config.GetMatchedFileSpec(fileName); matchedFileSpec != "" {
 			if filesNode := tsoptions.GetTsConfigPropArrayElementValue(config.ConfigFile.SourceFile, "files", matchedFileSpec); filesNode != nil {
 				return tsoptions.CreateDiagnosticForNodeInSourceFile(config.ConfigFile.SourceFile, filesNode.AsNode(), diagnostics.File_is_matched_by_files_list_specified_here)
