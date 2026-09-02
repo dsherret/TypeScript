@@ -18,7 +18,10 @@ import type { FileSystem } from "./fs.ts";
 import type { ModuleNameResolver } from "./options.ts";
 import { resolveExePath } from "./options.ts";
 import { API } from "./sync/api.ts";
-import { createWasmAPI, type WasmSource } from "./wasm/api.ts";
+import {
+    createWasmAPI,
+    type WasmSource,
+} from "./wasm/api.ts";
 
 /** Which engine backs the API. */
 export type Backend = "native" | "wasm";
@@ -55,6 +58,11 @@ export interface CreateAPIOptions {
     defaultLibraryPath?: string;
     /** Wasm backend: whether the file system distinguishes case. Defaults to true. */
     useCaseSensitiveFileNames?: boolean;
+    /**
+     * Wasm backend: bytes of linear memory reserved for the Go heap before the
+     * runtime starts. Defaults to 128 MiB — see `defaultInitialHeapSize`.
+     */
+    initialHeapSize?: number;
 }
 
 /** The created {@link API} together with the backend that ended up behind it. */
@@ -96,6 +104,7 @@ export function createAPIWithBackend(options: CreateAPIOptions = {}): CreatedAPI
         ...defined("cwd", options.cwd),
         ...defined("defaultLibraryPath", options.defaultLibraryPath),
         ...defined("useCaseSensitiveFileNames", options.useCaseSensitiveFileNames),
+        ...defined("initialHeapSize", options.initialHeapSize),
         ...defined("fs", options.fs),
         ...defined("resolveModuleName", options.resolveModuleName),
         ...defined("collectTiming", options.collectTiming),

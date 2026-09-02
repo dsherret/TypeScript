@@ -22,6 +22,7 @@ import { API } from "../sync/api.ts";
 import {
     WasmChannel,
     type WasmExports,
+    type WasmMemory,
 } from "../wasmChannel.ts";
 import {
     createWasiImports,
@@ -64,6 +65,11 @@ export interface WasmApiOptions {
     /** Virtual filesystem callbacks. */
     fs?: FileSystem;
     /**
+     * Bytes of linear memory to reserve for the Go heap before the runtime starts.
+     * Defaults to 128 MiB; 0 reserves nothing. See {@link defaultInitialHeapSize}.
+     */
+    initialHeapSize?: number;
+    /**
      * Resolves a module specifier in place of the compiler. See the option of
      * the same name in ../options.ts for what an answer means.
      */
@@ -92,6 +98,7 @@ export function createWasmAPI(options: WasmApiOptions = {}): API {
         wasi_snapshot_preview1: createWasiImports({ ...options.wasi, getMemory: () => instance!.exports.memory }),
         ts_host: channel.hostImports,
     }) as WasmInstance;
+    reserveHeap(instance.exports.memory, options.initialHeapSize ?? defaultInitialHeapSize);
     // Reactor: run package initialization without invoking a `main`.
     instance.exports._initialize();
 
@@ -109,6 +116,27 @@ export function createWasmAPI(options: WasmApiOptions = {}): API {
         collectTiming: options.collectTiming,
     } as unknown as APIOptions);
 }
+
+/**
+ * How much linear memory {@link createWasmAPI} reserves for the Go heap by default.
+ *
+ * Go's wasm runtime records the size of linear memory when it starts and hands
+ * that whole range to its allocator; only once the heap outgrows it does it call
+ * `memory.grow`, and it grows by exactly what the allocator asked for. Every one
+ * of those grows is dear in V8: the memory's `ArrayBuffer` is detached and
+ * replaced, and the growth counts against the external-memory budget that
+ * triggers JavaScript garbage collections. Encoding a syntax tree allocates
+ * heavily and briefly, which is the shape that suffers most — profiling a
+ * 300-file check put `memory.grow` and the collector it provoked at 13% of all
+ * samples, and fetching 200 files' trees cost six times what it costs with the
+ * heap reserved up front. Growing once, here, before the runtime measures the
+ * memory, makes every later allocation an ordinary one.
+ *
+ * Reserved pages are committed lazily by the host, so the reservation costs no
+ * resident memory until the heap actually reaches it; 128 MiB covers a few
+ * hundred files with room to spare, and a heap that needs more grows as before.
+ */
+export const defaultInitialHeapSize: number = 128 * 1024 * 1024;
 
 /**
  * Supplies the module every later {@link createWasmAPI} call instantiates.
@@ -141,6 +169,23 @@ interface WasmInstance {
 }
 
 let defaultModule: WebAssembly.Module | undefined;
+
+/** Grows `memory` so that at least `bytes` lie beyond what the module starts with. */
+function reserveHeap(memory: WasmMemory, bytes: number): void {
+    const pageSize = 64 * 1024;
+    const pages = Math.ceil(Math.max(0, bytes) / pageSize);
+    if (pages === 0) {
+        return;
+    }
+    try {
+        memory.grow(pages);
+    }
+    catch {
+        // a host that refuses the growth (a memory limit, an exhausted address
+        // space) throws a RangeError; the reactor then grows on demand as it would
+        // have anyway
+    }
+}
 
 function compileModule(wasm: WasmSource): WebAssembly.Module {
     return wasm instanceof Uint8Array || wasm instanceof ArrayBuffer ? new WebAssembly.Module(wasm) : wasm;
