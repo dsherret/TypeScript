@@ -1,8 +1,8 @@
 // End-to-end smoke test: drive the real sync API through the in-process Wasm
-// reactor over an in-memory file system. Run from _packages/native-preview:
+// reactor over an in-memory file system. Run from packages/typescript:
 //   npm run node -- test/wasm-smoke.ts
-import { SyntaxKind } from "@typescript/native-preview/unstable/ast";
-import { createVirtualFileSystem } from "@typescript/native-preview/unstable/fs";
+import { SyntaxKind } from "@typescript/typescript/unstable/ast";
+import { createVirtualFileSystem } from "@typescript/typescript/unstable/fs";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { createWasmAPI } from "../src/api/wasm/api.ts";
