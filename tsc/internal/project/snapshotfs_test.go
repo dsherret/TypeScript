@@ -1542,3 +1542,26 @@ func TestExpandAndFilterWatchEvents(t *testing.T) {
 			"the directory URI itself should be replaced by its files")
 	})
 }
+
+// TestIsRelevantFileName covers the two files a host that names the project's files
+// itself can put in the program: one whose extension is spelled in upper case, and one
+// with no extension at all, which is relevant only once the snapshot has read it.
+func TestIsRelevantFileName(t *testing.T) {
+	t.Parallel()
+
+	builder := newSnapshotFSBuilder(
+		vfstest.FromMap(map[string]string{"/project/index.ts": "export const x = 1;"}, false),
+		make(map[tspath.Path]*Overlay),
+		make(map[tspath.Path]*Overlay),
+		map[tspath.Path]*diskFile{"/project/script": {}},
+		make(map[tspath.Path]dirty.CloneableMap[tspath.Path, string]),
+		nil,
+		lsproto.PositionEncodingKindUTF16,
+		func(fileName string) tspath.Path { return tspath.Path(fileName) },
+	)
+
+	assert.Assert(t, builder.isRelevantFileName("file:///project/INDEX.TS", nil, nil), "an upper-case extension is still a TypeScript file")
+	assert.Assert(t, builder.isRelevantFileName("file:///project/script", nil, nil), "a file the snapshot has read is relevant whatever its name")
+	assert.Assert(t, !builder.isRelevantFileName("file:///project/other", nil, nil), "an unread extensionless file is not")
+	assert.Assert(t, !builder.isRelevantFileName("file:///project/notes.md", nil, nil), "an unread file of a foreign extension is not")
+}

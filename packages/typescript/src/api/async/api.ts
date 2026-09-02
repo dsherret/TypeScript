@@ -1,4 +1,3 @@
-import type { RenameOptions } from "./types.ts";
 import { CheckFlags } from "#enums/checkFlags";
 import { CompletionItemKind } from "#enums/completionItemKind";
 import { DiagnosticCategory } from "#enums/diagnosticCategory";
@@ -18,6 +17,7 @@ import {
     type __String,
     type Declaration,
     type Expression,
+    getEmitNode,
     type Identifier,
     type IndexSignatureDeclaration,
     ModifierFlags,
@@ -25,12 +25,14 @@ import {
     type Path,
     type SourceFile,
     type SyntaxKind,
+    type SynthesizedComment,
     type TypeNode,
     unescapeLeadingUnderscores,
 } from "../../ast/index.ts";
 import { assertNever } from "../../internal/utils.ts";
 import {
     encodeNode,
+    rootedFileName,
     uint8ArrayToBase64,
 } from "../node/encoder.ts";
 import {
@@ -56,19 +58,24 @@ import type {
     DocumentIdentifier,
     DocumentPosition,
     EmitOutputResponse as ProtocolEmitOutputResponse,
+    ExportedSymbolResponse,
     ImportAdderAction,
     IntrinsicTypeMethod,
     LSPUpdateSnapshotParams,
+    NodeSyntheticComments,
     ParsedCommandLine,
+    ProjectConfig,
     ProjectReference,
     ProjectResponse,
     ReadConfigFileResponse,
     SignaturePropertyMethod,
     SignatureResponse,
+    SourceFileIdentity,
     SourceFileMetadata,
     SymbolPropertyMethod,
     SymbolResponse,
     SymbolsPropertyMethod,
+    SyntheticComment,
     TextEdit,
     TypeAcquisition,
     TypePropertyMethod,
@@ -76,17 +83,17 @@ import type {
     TypesPropertyMethod,
     UpdateSnapshotParams,
     UpdateSnapshotResponse,
-    ExportedSymbolResponse,
 } from "../proto.ts";
 import type {
-    FileTextEdits,
     CodeFixAction,
     CombinedCodeActions,
     FileSpan,
+    FileTextEdits,
     FormattingOptions,
     OrganizeImportsMode,
     QuotePreference,
 } from "../proto.ts";
+import type { RenameOptions } from "./types.ts";
 
 import {
     resolveFileName,
@@ -185,9 +192,12 @@ export type {
     NumberLiteralType,
     ObjectType,
     ParsedCommandLine,
+    ProjectConfig,
     ProjectReference,
     ReadConfigFileResponse,
+    RenameOptions,
     RequestTiming,
+    SourceFileIdentity,
     SourceFileMetadata,
     StringLiteralType,
     StringMappingType,
@@ -231,7 +241,26 @@ export class API<FromLSP extends boolean = false> implements FormatDiagnosticsHo
     private initialized: boolean = false;
     private activeSnapshots: Set<Snapshot> = new Set();
     private latestSnapshot: Snapshot | undefined;
+    private compilerVersion: string | undefined;
     readonly internal: InternalAPI;
+
+    // @sync-skip-block-start
+    // The one member the two APIs cannot share. `ensureInitialized` is async here, and a
+    // getter cannot await it, so the version is only there once something else has
+    // initialized the session. The sync API's can initialize on demand and so always has
+    // one — which is why this is expressed as a directive rather than left to drift.
+    /** The compiler's own version, e.g. `7.1.0-dev`. Undefined until initialized. */
+    get version(): string | undefined {
+        return this.compilerVersion;
+    }
+    // @sync-skip-block-end
+    // @sync-only-start
+    // /** The compiler's own version, e.g. `7.1.0-dev`. */
+    // get version(): string {
+    //     this.ensureInitialized();
+    //     return this.compilerVersion!;
+    // }
+    // @sync-only-end
 
     constructor(options: APIOptions | LSPConnectionOptions = {}) {
         this.client = new Client(options);
@@ -257,6 +286,7 @@ export class API<FromLSP extends boolean = false> implements FormatDiagnosticsHo
             this.getCanonicalFileNameWorker = getCanonicalFileName;
             this.currentDirectory = currentDirectory;
             this.toPath = (fileName: string) => toPath(fileName, currentDirectory, getCanonicalFileName) as Path;
+            this.compilerVersion = response.version;
             this.initialized = true;
         }
     }
@@ -335,6 +365,10 @@ export class API<FromLSP extends boolean = false> implements FormatDiagnosticsHo
             throw new Error(`Failed to parse source file: ${resolveFileName(file)}`);
         }
         const sourceFile = new RemoteSourceFile(binaryData, this.parseDecoder, this.client.getTimingCollector()) as unknown as SourceFile;
+        // offered to the cache so that whichever program next holds this text answers
+        // with this object rather than one of its own — see SourceFileCache#offer
+        const view = new DataView(binaryData.buffer, binaryData.byteOffset, binaryData.byteLength);
+        this.sourceFileCache.offer(this.toPath!(resolveFileName(file)), sourceFile, readParseOptionsKey(view), readSourceFileHash(view));
         return sourceFile;
     }
 
@@ -830,11 +864,10 @@ export class Project {
     readonly id: Path;
     readonly configFileName: string;
     readonly currentDirectory: string;
-    readonly parsedCommandLine: ParsedCommandLine;
+    /** The project's config, without its root file list — see `getRootFileNames`. */
+    readonly parsedCommandLine: ProjectConfig;
     /** @deprecated Use `parsedCommandLine.options`. */
     readonly compilerOptions: CompilerOptions;
-    /** @deprecated Use `parsedCommandLine.fileNames`. */
-    readonly rootFiles: readonly string[];
 
     readonly program: Program;
     readonly checker: Checker;
@@ -842,6 +875,7 @@ export class Project {
     readonly languageService: LanguageService;
     private client: Client;
     private snapshotId: number;
+    private rootFileNames: readonly string[] | undefined;
 
     constructor(
         data: ProjectResponse,
@@ -860,7 +894,6 @@ export class Project {
         }
         this.parsedCommandLine = data.parsedCommandLine;
         this.compilerOptions = this.parsedCommandLine.options;
-        this.rootFiles = this.parsedCommandLine.fileNames;
         this.client = client;
         this.snapshotId = snapshotId;
         this.program = new Program(
@@ -882,6 +915,23 @@ export class Project {
         this.languageService = new LanguageService(snapshotId, this, client, objectRegistry);
     }
 
+    /**
+     * The project's root file names, as its config resolved them.
+     *
+     * These are fetched the first time they are asked for rather than sent with
+     * the project, because the list is as long as the project and a snapshot
+     * describes every project it holds: carrying it would make every edit cost
+     * time proportional to the size of the project, for a list most callers never
+     * read.
+     */
+    async getRootFileNames(): Promise<readonly string[]> {
+        this.rootFileNames ??= await this.client.apiRequest("getProjectRootFiles", {
+            snapshot: this.snapshotId,
+            project: this.id,
+        }) ?? [];
+        return this.rootFileNames;
+    }
+
     /** @deprecated Use `languageService.getImportAdderEdits`. */
     getImportAdderEdits(file: DocumentIdentifier, actions: readonly APIImportAdderAction[]): Promise<readonly TextEdit[]> {
         return this.languageService.getImportAdderEdits(file, actions);
@@ -894,7 +944,7 @@ export class Project {
 
     /** Returns the edits that format an entire file. */
     async formatDocument(file: DocumentIdentifier, options?: FormattingOptions): Promise<readonly TextEdit[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("formatDocument", {
+        const data = await this.client.apiRequest("formatDocument", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -905,7 +955,7 @@ export class Project {
 
     /** Returns the edits that format the `[pos, end)` span of a file. */
     async formatDocumentRange(file: DocumentIdentifier, pos: number, end: number, options?: FormattingOptions): Promise<readonly TextEdit[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("formatDocumentRange", {
+        const data = await this.client.apiRequest("formatDocumentRange", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -921,7 +971,7 @@ export class Project {
      * file. Defaults to all three; see {@link OrganizeImportsMode}.
      */
     async organizeImports(file: DocumentIdentifier, mode?: OrganizeImportsMode): Promise<readonly TextEdit[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("organizeImports", {
+        const data = await this.client.apiRequest("organizeImports", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -940,7 +990,7 @@ export class Project {
      * given the old name as an alias.
      */
     async rename(file: DocumentIdentifier, position: number, newName: string, options: RenameOptions = {}): Promise<readonly FileTextEdits[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("rename", {
+        const data = await this.client.apiRequest("rename", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -953,7 +1003,7 @@ export class Project {
 
     /** Returns the locations that define the symbol at `position`. */
     async getDefinition(file: DocumentIdentifier, position: number): Promise<readonly FileSpan[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getDefinition", {
+        const data = await this.client.apiRequest("getDefinition", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -964,7 +1014,7 @@ export class Project {
 
     /** Returns the locations that implement the symbol at `position`. */
     async getImplementations(file: DocumentIdentifier, position: number): Promise<readonly FileSpan[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getImplementations", {
+        const data = await this.client.apiRequest("getImplementations", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -985,7 +1035,7 @@ export class Project {
         errorCodes?: readonly number[],
         quotePreference?: QuotePreference,
     ): Promise<readonly CodeFixAction[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getCodeFixes", {
+        const data = await this.client.apiRequest("getCodeFixes", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -1008,7 +1058,7 @@ export class Project {
         options?: FormattingOptions,
         quotePreference?: QuotePreference,
     ): Promise<CombinedCodeActions> {
-        return await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getCombinedCodeFix", {
+        return await this.client.apiRequest("getCombinedCodeFix", {
             snapshot: this.snapshotId,
             project: this.id,
             file,
@@ -1097,6 +1147,8 @@ export class LanguageService {
             definition: new NodeHandle(entry.definition, this.project),
             symbol: entry.symbol ? this.objectRegistry.getOrCreateSymbol(entry.symbol) : undefined,
             references: (entry.references ?? []).map(h => new NodeHandle(h, this.project)),
+            displayParts: entry.displayParts ?? [],
+            writeAccess: entry.writeAccess ?? [],
         }));
     }
 
@@ -1184,6 +1236,41 @@ export class Program implements FormatDiagnosticsHost {
             return retained;
         }
 
+        // The cache may already hold the tree this would fetch — usually the one
+        // `parseSourceFile` offered for text the client wrote itself. Settling that needs
+        // the server's content hash and parse options key and nothing else, which is a few
+        // dozen bytes against a whole AST, so ask for those first. On a match the entry is
+        // retained and the tree never crosses; on a miss the fetch below happens as it
+        // always did, one small request the worse for having asked.
+        //
+        // Asking whenever the cache holds *anything* for the path is deliberately coarse:
+        // an entry another snapshot left may well not match, and paying a small request to
+        // find that out is the trade. What it buys is not having to decide from here which
+        // entries could match, which is what the two values being asked for are for. A path
+        // the cache has nothing for cannot match anything and is not asked about.
+        // @sync-skip-block-start
+        //
+        // Nothing rests on the cache still holding what `has` saw: another request may run
+        // over this await and displace the offer or release the entry, and all that can do
+        // is turn a hit into a miss, which is the fetch below.
+        // @sync-skip-block-end
+        if (this.sourceFileCache.has(path)) {
+            const identity = await this.client.apiRequest("getSourceFileIdentity", {
+                snapshot: this.snapshotId,
+                project: this.project.id,
+                file,
+            });
+            // the program does not hold the file, which is the same answer `getSourceFile`
+            // would have come back with
+            if (!identity) {
+                return undefined;
+            }
+            const known = this.sourceFileCache.retainMatching(path, identity.parseOptionsKey, identity.contentHash, this.snapshotId, this.project.id);
+            if (known) {
+                return known;
+            }
+        }
+
         // Fetch from server
         const binaryData = await this.client.apiRequestBinary("getSourceFile", {
             snapshot: this.snapshotId,
@@ -1209,6 +1296,26 @@ export class Program implements FormatDiagnosticsHost {
             project: this.project.id,
         });
         return data ?? [];
+    }
+
+    /**
+     * Every source file in the program.
+     *
+     * Each one is fetched and decoded on the way out, so a caller that only needs
+     * the names should ask for {@link getSourceFileNames} instead.
+     */
+    async getSourceFiles(): Promise<readonly SourceFile[]> {
+        const files: SourceFile[] = [];
+        for (const fileName of await this.getSourceFileNames()) {
+            const file = await this.getSourceFile(fileName);
+            if (file !== undefined) files.push(file);
+        }
+        return files;
+    }
+
+    /** The checker for this program, which the project owns. */
+    getTypeChecker(): Checker {
+        return this.project.checker;
     }
 
     /**
@@ -1495,7 +1602,7 @@ export class Checker {
     }
 
     async getSymbolOfDeclaration(node: Node): Promise<Symbol | undefined> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getSymbolOfDeclaration", {
+        const data = await this.client.apiRequest("getSymbolOfDeclaration", {
             snapshot: this.snapshotId,
             project: this.project.id,
             declaration: getNodeId(node),
@@ -1504,16 +1611,16 @@ export class Checker {
     }
 
     async symbolToString(symbol: Symbol, enclosingDeclaration?: Node): Promise<string> {
-        return (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("symbolToString", {
+        return this.client.apiRequest("symbolToString", {
             snapshot: this.snapshotId,
             project: this.project.id,
             symbol: symbol.id,
-            location: enclosingDeclaration ? getNodeId(enclosingDeclaration) : undefined,
-        });
+            ...(enclosingDeclaration ? { location: getNodeId(enclosingDeclaration) } : {}),
+        }) as Promise<string>;
     }
 
     async getAmbientModules(): Promise<readonly Symbol[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getAmbientModules", {
+        const data = await this.client.apiRequest("getAmbientModules", {
             snapshot: this.snapshotId,
             project: this.project.id,
         });
@@ -1521,7 +1628,7 @@ export class Checker {
     }
 
     async getExportedSymbolsOfFiles(files: readonly DocumentIdentifier[]): Promise<readonly (readonly ExportedSymbol[])[]> {
-        const data = await (this.client.apiRequest as (m: string, p: unknown) => Promise<any>)("getExportedSymbolsOfFiles", {
+        const data = await this.client.apiRequest("getExportedSymbolsOfFiles", {
             snapshot: this.snapshotId,
             project: this.project.id,
             files,
@@ -2231,6 +2338,49 @@ export class Checker {
         });
     }
 
+    async getJsDocTagsOfSignature(signature: Signature): Promise<readonly JSDocTagInfo[]> {
+        const data = await this.client.apiRequest("getJsDocTagsOfSignature", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            signature: signature.id,
+        });
+        return data ?? [];
+    }
+
+    async getDocumentationCommentOfSignature(signature: Signature): Promise<string> {
+        return this.client.apiRequest("getDocumentationCommentOfSignature", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            signature: signature.id,
+        });
+    }
+
+    /**
+     * Returns the symbols the binder placed in the node's own local scope, in declaration
+     * order. Nodes that do not hold locals return an empty array.
+     */
+    async getLocals(node: Node): Promise<readonly Symbol[]> {
+        const data = await this.client.apiRequest("getLocalsOfNode", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            location: getNodeId(node),
+        });
+        return data ? data.map(d => this.objectRegistry.getOrCreateSymbol(d)) : [];
+    }
+
+    /**
+     * Returns the type a value of the given type resolves to when awaited, or undefined
+     * when the type cannot be awaited.
+     */
+    async getAwaitedType(type: Type): Promise<Type | undefined> {
+        const data = await this.client.apiRequest("getAwaitedType", {
+            snapshot: this.snapshotId,
+            project: this.project.id,
+            type: type.id,
+        });
+        return data ? this.objectRegistry.getOrCreateType(data) : undefined;
+    }
+
     /**
      * Get the type arguments of a type reference (e.g. the `string` in `Array<string>`).
      */
@@ -2245,9 +2395,25 @@ export class Checker {
 }
 
 export interface PrintNodeOptions {
+    /**
+     * Text of the file the node was parsed from. The printer reads comments and
+     * original token text out of it, so a node printed without it prints without
+     * its comments.
+     */
+    sourceText?: string | undefined;
+    /** Names the script kind `sourceText` is parsed as. */
+    fileName?: string | undefined;
     preserveSourceNewlines?: boolean | undefined;
     neverAsciiEscape?: boolean | undefined;
     terminateUnterminatedLiterals?: boolean | undefined;
+    /** Whether the printer leaves the node's comments out. */
+    removeComments?: boolean | undefined;
+    /**
+     * The line break the printer writes, as a `NewLineKind`: 1 for CRLF, 2 for LF.
+     * Defaults to LF. Only the breaks the printer emits are affected, so a line
+     * break inside a template literal keeps whatever the source gave it.
+     */
+    newLine?: number | undefined;
 }
 
 export class Emitter {
@@ -2258,15 +2424,52 @@ export class Emitter {
     }
 
     async printNode(node: Node, options: PrintNodeOptions = {}): Promise<string> {
-        const encoded = encodeNode(node);
+        const nodeIndices = new Map<Node, number>();
+        const encoded = encodeNode(node, nodeIndices);
         const base64 = uint8ArrayToBase64(encoded);
         return this.client.apiRequest("printNode", {
             data: base64,
+            syntheticComments: collectSyntheticComments(nodeIndices),
+            ...(options.sourceText !== undefined ? { sourceText: options.sourceText } : {}),
+            // sourceText is reparsed under this name, and the parser wants an
+            // absolute, normalized one; only the script kind is read off it.
+            ...(options.fileName !== undefined ? { fileName: rootedFileName(options.fileName) } : {}),
             ...(options.preserveSourceNewlines !== undefined ? { preserveSourceNewlines: options.preserveSourceNewlines } : {}),
             ...(options.neverAsciiEscape !== undefined ? { neverAsciiEscape: options.neverAsciiEscape } : {}),
             ...(options.terminateUnterminatedLiterals !== undefined ? { terminateUnterminatedLiterals: options.terminateUnterminatedLiterals } : {}),
+            ...(options.removeComments !== undefined ? { removeComments: options.removeComments } : {}),
+            ...(options.newLine !== undefined ? { newLine: options.newLine } : {}),
         });
     }
+}
+
+/**
+ * The synthetic comments carried by any node in an encoded tree, addressed by the
+ * index the encoder wrote that node at. Nodes with no comments are left out.
+ */
+function collectSyntheticComments(nodeIndices: Map<Node, number>): NodeSyntheticComments[] {
+    const result: NodeSyntheticComments[] = [];
+    for (const [node, index] of nodeIndices) {
+        const emitNode = getEmitNode(node);
+        const leading = emitNode?.leadingComments;
+        const trailing = emitNode?.trailingComments;
+        if (!leading?.length && !trailing?.length) continue;
+        result.push({
+            node: index,
+            ...(leading?.length ? { leading: leading.map(toSyntheticComment) } : {}),
+            ...(trailing?.length ? { trailing: trailing.map(toSyntheticComment) } : {}),
+        });
+    }
+    return result;
+}
+
+function toSyntheticComment(comment: SynthesizedComment): SyntheticComment {
+    return {
+        kind: comment.kind,
+        text: comment.text,
+        ...(comment.hasTrailingNewLine !== undefined ? { hasTrailingNewLine: comment.hasTrailingNewLine } : {}),
+        ...(comment.hasLeadingNewline !== undefined ? { hasLeadingNewline: comment.hasLeadingNewline } : {}),
+    };
 }
 
 export class SnapshotInternalAPI {
@@ -2349,6 +2552,23 @@ export interface ReferencedSymbolEntry {
     symbol?: Symbol | undefined;
     /** The node handles for each reference to the symbol. */
     references: NodeHandle[];
+    /**
+     * The classified pieces of the definition's display text, e.g. `function`,
+     * ` `, `myFunction`, `(`, `)`, `:`, ` `, `void`. Empty when the definition
+     * resolved to no symbol.
+     */
+    displayParts: DisplayPart[];
+    /**
+     * For the reference at the same position in {@link references}, whether it
+     * writes the symbol rather than reads it.
+     */
+    writeAccess: boolean[];
+}
+
+/** One classified piece of a symbol's display text. */
+export interface DisplayPart {
+    text: string;
+    kind: string;
 }
 
 /** A single usage of a signature, pairing the reference name with its call expression (if any). */
@@ -2381,6 +2601,7 @@ export class Symbol {
     private readonly exportSymbol!: number;
     private membersCache: Promise<ReadonlyMap<__String, Symbol>> | undefined;
     private exportsCache: Promise<ReadonlyMap<__String, Symbol>> | undefined;
+    private globalExportsCache: Promise<ReadonlyMap<__String, Symbol>> | undefined;
 
     constructor(data: SymbolResponse, objectRegistry: SnapshotObjectRegistry) {
         this.objectRegistry = objectRegistry;
@@ -2420,6 +2641,14 @@ export class Symbol {
      */
     getExports(): Promise<ReadonlyMap<__String, Symbol>> {
         return this.exportsCache ??= this.fetchSymbolTable("getExportsOfSymbol");
+    }
+
+    /**
+     * Get the UMD global exports this module symbol declares with `export as namespace X`,
+     * keyed by escaped name. The result is cached on the symbol.
+     */
+    getGlobalExports(): Promise<ReadonlyMap<__String, Symbol>> {
+        return this.globalExportsCache ??= this.fetchSymbolTable("getGlobalExportsOfSymbol");
     }
 
     private async fetchSymbolTable(method: SymbolsPropertyMethod): Promise<ReadonlyMap<__String, Symbol>> {
@@ -2965,6 +3194,14 @@ export class Signature {
 
     get isAbstract(): boolean {
         return (this.flags & SignatureFlags.Abstract) !== 0;
+    }
+
+    async getJsDocTags(checker: Checker): Promise<readonly JSDocTagInfo[]> {
+        return checker.getJsDocTagsOfSignature(this);
+    }
+
+    async getDocumentationComment(checker: Checker): Promise<string> {
+        return checker.getDocumentationCommentOfSignature(this);
     }
 }
 

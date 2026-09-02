@@ -20,7 +20,6 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/core"
 	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
 	"github.com/microsoft/TypeScript/tsc/internal/format"
-	"github.com/microsoft/TypeScript/tsc/internal/parser"
 	"github.com/microsoft/TypeScript/tsc/internal/ipc"
 	"github.com/microsoft/TypeScript/tsc/internal/json"
 	"github.com/microsoft/TypeScript/tsc/internal/ls"
@@ -28,6 +27,7 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsconv"
 	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
 	"github.com/microsoft/TypeScript/tsc/internal/nodebuilder"
+	"github.com/microsoft/TypeScript/tsc/internal/parser"
 	"github.com/microsoft/TypeScript/tsc/internal/pprof"
 	"github.com/microsoft/TypeScript/tsc/internal/printer"
 	"github.com/microsoft/TypeScript/tsc/internal/project"
@@ -628,12 +628,16 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetDefaultProjectForFile(ctx, parsed.(*GetDefaultProjectForFileParams))
 	case string(MethodGetSourceFile):
 		return s.handleGetSourceFile(ctx, parsed.(*GetSourceFileParams))
+	case string(MethodGetSourceFileIdentity):
+		return s.handleGetSourceFileIdentity(ctx, parsed.(*GetSourceFileParams))
 	case string(MethodGetSourceFileNames):
 		return s.handleGetSourceFileNames(ctx, parsed.(*GetSourceFileNamesParams))
 	case string(MethodGetSourceFileMetadata):
 		return s.handleGetSourceFileMetadata(ctx, parsed.(*GetSourceFileParams))
 	case string(MethodGetConfigFileNames):
 		return s.handleGetConfigFileNames(ctx, parsed.(*GetProjectDiagnosticsParams))
+	case string(MethodGetProjectRootFiles):
+		return s.handleGetProjectRootFiles(ctx, parsed.(*GetProjectDiagnosticsParams))
 	case string(MethodGetConfigSourceFile):
 		return s.handleGetConfigSourceFile(ctx, parsed.(*GetSourceFileParams))
 	case string(MethodGetSymbolAtPosition):
@@ -678,6 +682,8 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetExportsOfSymbol(ctx, parsed.(*GetSymbolPropertyParams))
 	case string(MethodGetExportSymbolOfSymbol):
 		return s.handleGetExportSymbolOfSymbol(ctx, parsed.(*GetSymbolPropertyParams))
+	case string(MethodGetGlobalExportsOfSymbol):
+		return s.handleGetGlobalExportsOfSymbol(ctx, parsed.(*GetSymbolPropertyParams))
 	case string(MethodGetSymbolOfType):
 		return s.handleGetSymbolOfType(ctx, parsed.(*GetTypePropertyParams))
 	case string(MethodGetTargetOfType):
@@ -840,6 +846,14 @@ func (s *Session) HandleRequest(ctx context.Context, method string, params json.
 		return s.handleGetJSDocTags(ctx, parsed.(*CheckerSymbolParams))
 	case string(MethodGetDocumentationComment):
 		return s.handleGetDocumentationComment(ctx, parsed.(*CheckerSymbolParams))
+	case string(MethodGetJSDocTagsOfSignature):
+		return s.handleGetJSDocTagsOfSignature(ctx, parsed.(*CheckerSignatureParams))
+	case string(MethodGetDocumentationCommentOfSignature):
+		return s.handleGetDocumentationCommentOfSignature(ctx, parsed.(*CheckerSignatureParams))
+	case string(MethodGetLocalsOfNode):
+		return s.handleGetLocalsOfNode(ctx, parsed.(*CheckerNodeParams))
+	case string(MethodGetAwaitedType):
+		return s.handleGetAwaitedType(ctx, parsed.(*CheckerTypeParams))
 	case string(MethodIsArrayType):
 		return s.handleIsArrayType(ctx, parsed.(*CheckerTypeParams))
 	case string(MethodIsTupleType):
@@ -1338,6 +1352,60 @@ func (s *Session) handleGetSourceFile(ctx context.Context, params *GetSourceFile
 	}
 
 	return s.encodeSourceFileResponse(program.GetSourceFile(params.File.ToFileName()))
+}
+
+// handleGetSourceFileIdentity says which parse of a file the program is holding,
+// without sending the file.
+//
+// It answers with the two fields handleGetSourceFile's response leads with, read off the
+// very source file that response would have encoded. A client that already has a tree for
+// the path — because it parsed the text itself, or fetched it under another snapshot —
+// needs only these to know whether its copy is the program's, and the whole point is that
+// the answer is a few dozen bytes where the file is a few dozen kilobytes.
+//
+// A file the program does not hold answers nil, which is what handleGetSourceFile answers
+// with too.
+// @gen-proto-nullable
+func (s *Session) handleGetSourceFileIdentity(ctx context.Context, params *GetSourceFileParams) (*SourceFileIdentity, error) {
+	sd, err := s.getSnapshotData(params.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	program, err := sd.getProgram(params.Project)
+	if err != nil {
+		return nil, err
+	}
+
+	sourceFile := program.GetSourceFile(params.File.ToFileName())
+	if sourceFile == nil {
+		return nil, nil
+	}
+	return &SourceFileIdentity{
+		ContentHash:     encoder.SourceFileHash(sourceFile),
+		ParseOptionsKey: encoder.ParseOptionsKey(sourceFile),
+	}, nil
+}
+
+// handleGetProjectRootFiles returns the project's root file list, which its
+// description leaves off — see NewProjectResponse.
+// @gen-proto-nullable
+func (s *Session) handleGetProjectRootFiles(ctx context.Context, params *GetProjectDiagnosticsParams) ([]string, error) {
+	sd, err := s.getSnapshotData(params.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	// the roots the project was asked to hold — its config's, then the ones the client
+	// named for it directly — rather than the program's, which also carries whatever
+	// the typings installer added
+	proj, err := sd.getProject(params.Project)
+	if err != nil {
+		return nil, err
+	}
+	if proj.CommandLine == nil {
+		return nil, nil
+	}
+	return proj.RootFileNames(), nil
 }
 
 // handleGetConfigFileNames returns tsconfig file names associated with the project's command line.
@@ -1905,6 +1973,20 @@ func (s *Session) handleGetMembersOfSymbol(ctx context.Context, params *GetSymbo
 func (s *Session) handleGetExportsOfSymbol(ctx context.Context, params *GetSymbolPropertyParams) ([]*SymbolResponse, error) {
 	return s.resolveSymbolTablePropertyOfSymbol(ctx, params, func(symbol *ast.Symbol) ast.SymbolTable {
 		return symbol.Exports
+	})
+}
+
+// handleGetGlobalExportsOfSymbol returns the UMD global exports declared by a module symbol,
+// that is the names introduced by its `export as namespace X` declarations. tsgo keeps that
+// table on the source file rather than on the symbol, so it is reached through the symbol's
+// value declaration.
+// @gen-proto-nullable
+func (s *Session) handleGetGlobalExportsOfSymbol(ctx context.Context, params *GetSymbolPropertyParams) ([]*SymbolResponse, error) {
+	return s.resolveSymbolTablePropertyOfSymbol(ctx, params, func(symbol *ast.Symbol) ast.SymbolTable {
+		if d := symbol.ValueDeclaration; d != nil && ast.IsSourceFile(d) {
+			return d.AsSourceFile().GlobalExports
+		}
+		return nil
 	})
 }
 
@@ -3604,6 +3686,102 @@ func (s *Session) handleGetDocumentationComment(ctx context.Context, params *Che
 	return ls.GetSymbolDocumentationComment(setup.checker, symbol), nil
 }
 
+// handleGetJSDocTagsOfSignature returns the JSDoc tags on a signature's declaration.
+// @gen-proto-nullable
+func (s *Session) handleGetJSDocTagsOfSignature(ctx context.Context, params *CheckerSignatureParams) ([]*JSDocTagInfo, error) {
+	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer setup.done()
+
+	sig, err := setup.resolveSignatureHandle(params.Signature)
+	if err != nil {
+		return nil, err
+	}
+
+	tags := ls.GetSignatureJSDocTags(sig.Declaration())
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	results := make([]*JSDocTagInfo, len(tags))
+	for i, tag := range tags {
+		results[i] = &JSDocTagInfo{Name: tag.Name, Text: tag.Text}
+	}
+	return results, nil
+}
+
+// handleGetDocumentationCommentOfSignature returns the rendered documentation comment of a
+// signature's declaration as plain text.
+func (s *Session) handleGetDocumentationCommentOfSignature(ctx context.Context, params *CheckerSignatureParams) (string, error) {
+	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+	if err != nil {
+		return "", err
+	}
+	defer setup.done()
+
+	sig, err := setup.resolveSignatureHandle(params.Signature)
+	if err != nil {
+		return "", err
+	}
+
+	return ls.GetSignatureDocumentationComment(setup.checker, sig.Declaration()), nil
+}
+
+// handleGetLocalsOfNode returns the symbols the binder placed in a node's own local scope,
+// in declaration order. Nodes that do not hold locals return nothing.
+// @gen-proto-nullable
+func (s *Session) handleGetLocalsOfNode(ctx context.Context, params *CheckerNodeParams) ([]*SymbolResponse, error) {
+	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer setup.done()
+
+	node, err := setup.sd.resolveNodeHandle(setup.program, params.Location)
+	if err != nil {
+		return nil, err
+	}
+	if !ast.IsLocalsContainer(node) {
+		return nil, nil
+	}
+
+	locals := node.Locals()
+	if len(locals) == 0 {
+		return nil, nil
+	}
+	symbols := make([]*ast.Symbol, 0, len(locals))
+	for _, sym := range locals {
+		symbols = append(symbols, sym)
+	}
+	// a SymbolTable is a plain map, so sort by the checker's ordering (first declaration
+	// position) to turn Go's randomized iteration into declaration order.
+	slices.SortFunc(symbols, setup.checker.CompareSymbols)
+
+	results := make([]*SymbolResponse, len(symbols))
+	for i, sym := range symbols {
+		results[i] = setup.newSymbolResponse(sym)
+	}
+	return results, nil
+}
+
+// handleGetAwaitedType returns the type a value of the given type resolves to when awaited.
+// @gen-proto-nullable
+func (s *Session) handleGetAwaitedType(ctx context.Context, params *CheckerTypeParams) (*TypeResponse, error) {
+	setup, err := s.setupChecker(ctx, params.Snapshot, params.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer setup.done()
+
+	t, err := setup.resolveTypeHandle(params.Type)
+	if err != nil {
+		return nil, err
+	}
+
+	return setup.newTypeResponse(setup.checker.GetAwaitedType(t)), nil
+}
+
 // handleGetTypeArguments returns the type arguments of a type reference.
 // @gen-proto-nullable
 func (s *Session) handleGetTypeArguments(ctx context.Context, params *CheckerTypeParams) ([]*TypeResponse, error) {
@@ -4229,6 +4407,7 @@ func (s *Session) handleParseSourceFile(ctx context.Context, params *ParseSource
 	)
 	return s.encodeSourceFileResponse(sourceFile)
 }
+
 func (s *Session) externalModuleIndicatorOptionsFor(params *ParseSourceFileParams, fileName string, path tspath.Path) ast.ExternalModuleIndicatorOptions {
 	if params.Snapshot == 0 {
 		return ast.ExternalModuleIndicatorOptions{}
@@ -4248,5 +4427,5 @@ func (s *Session) externalModuleIndicatorOptionsFor(params *ParseSourceFileParam
 	// none recorded, and taking the zero value for it says "no package scope" — which reads
 	// a file created under a `"type": "module"` scope as a script and so parses it with
 	// options the program would not have given it. See Program.SourceFileMetaDataFor.
-	return ast.GetExternalModuleIndicatorOptions(fileName, program.Options(), program.GetSourceFileMetaData(path))
+	return ast.GetExternalModuleIndicatorOptions(fileName, program.Options(), program.SourceFileMetaDataFor(fileName))
 }

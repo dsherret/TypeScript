@@ -1,7 +1,13 @@
 import {
     type FileReference,
+    forEachLeadingCommentRange,
+    forEachTrailingCommentRange,
+    getChildren,
+    getFirstToken,
+    getLastToken,
     ModifierFlags,
     type Node,
+    type SourceFile,
     SyntaxKind,
 } from "../../ast/index.ts";
 import type { TimingCollector } from "../timing.ts";
@@ -51,6 +57,7 @@ export interface SourceFileInfo {
     readonly _offsetExtendedData: number;
     readonly _offsetStructuredData: number;
     readonly _decoder: TextDecoder;
+    readonly text: string;
     nodes: any[];
     readonly path?: string;
     /**
@@ -133,6 +140,42 @@ export function modifierToFlag(kind: SyntaxKind): ModifierFlags {
     }
 }
 
+/**
+ * The position of the `/**` that opens the doc comment ending at `end`.
+ *
+ * The compiler gives a `JSDoc` node its full start, so whitespace and any
+ * comment that is not the doc comment itself — a `//` line comment closing the
+ * previous line, a plain `/* *\/` block, a shebang — fall inside `[pos, end)`.
+ * Classic TypeScript starts the node at its `/**` instead, and callers that read
+ * a doc comment's text or its start expect that, so the leading trivia is
+ * skipped here.
+ *
+ * The trivia is walked with the scanner's own comment iteration, trailing ranges
+ * before leading ones, which is how `parser.GetJSDocCommentRanges` found these
+ * comments in the first place: a parameter's or an arrow function's doc comment
+ * follows its `pos` on the same line and is a trailing range, everything else is
+ * a leading one. Returns `pos` unchanged when no comment ends where the node
+ * does, which is the case for a doc comment the parser synthesized out of a tag
+ * rather than read from the file.
+ */
+function getDocCommentStart(text: string, pos: number, end: number): number {
+    let start = pos;
+    // The iteration stops on the first truthy result, so the answer is written
+    // out to `start` rather than returned: a doc comment at the start of the
+    // file is at position 0, which would not stop it.
+    const found = (commentPos: number, commentEnd: number): true | undefined => {
+        if (commentEnd !== end) {
+            return undefined;
+        }
+        start = commentPos;
+        return true;
+    };
+    if (forEachTrailingCommentRange(text, pos, found) === undefined) {
+        forEachLeadingCommentRange(text, pos, found);
+    }
+    return start;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // RemoteNodeBase
 // ═══════════════════════════════════════════════════════════════════════════
@@ -142,6 +185,8 @@ export class RemoteNodeBase {
     view: DataView;
     protected index: number;
     protected _byteIndex: number;
+    /** Memo for `pos` on a `JSDoc` node, whose start has to be scanned out of the node's leading trivia. */
+    private _docCommentPos: number | undefined;
 
     constructor(view: DataView, index: number, parent: any, byteIndex: number) {
         this.view = view;
@@ -154,8 +199,44 @@ export class RemoteNodeBase {
         return this.view.getUint32(this._byteIndex + NODE_OFFSET_KIND, true);
     }
 
+    /**
+     * Returns every child in source order, including the tokens and
+     * `SyntaxList` nodes the tree does not store.
+     *
+     * The free function does the work; it lives in ../../ast/children.ts
+     * because it is about the AST rather than about the wire format. `this` is
+     * always a RemoteNode at runtime — only that subclass is constructed —
+     * which is why getSourceFile is reachable here.
+     */
+    getChildren(sourceFile?: SourceFile): Node[] {
+        const node = this as unknown as Node;
+        return getChildren(node, sourceFile ?? node.getSourceFile());
+    }
+
+    getChildCount(sourceFile?: SourceFile): number {
+        return this.getChildren(sourceFile).length;
+    }
+
+    getChildAt(index: number, sourceFile?: SourceFile): Node {
+        return this.getChildren(sourceFile)[index];
+    }
+
+    getFirstToken(sourceFile?: SourceFile): Node | undefined {
+        const node = this as unknown as Node;
+        return getFirstToken(node, sourceFile ?? node.getSourceFile());
+    }
+
+    getLastToken(sourceFile?: SourceFile): Node | undefined {
+        const node = this as unknown as Node;
+        return getLastToken(node, sourceFile ?? node.getSourceFile());
+    }
+
     get pos(): number {
-        return this.view.getInt32(this._byteIndex + NODE_OFFSET_POS, true);
+        const pos = this.view.getInt32(this._byteIndex + NODE_OFFSET_POS, true);
+        if (this.kind !== SyntaxKind.JSDoc) {
+            return pos;
+        }
+        return this._docCommentPos ??= getDocCommentStart(this.sourceFile.text, pos, this.end);
     }
 
     get end(): number {

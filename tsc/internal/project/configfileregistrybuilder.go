@@ -159,6 +159,12 @@ func (c *configFileRegistryBuilder) reloadIfNeeded(entry *configFileEntry, fileN
 			existingOptions = &core.CompilerOptions{RunExternalCode: core.TSTrue}
 		}
 		entry.commandLine, _ = tsoptions.GetParsedCommandLineOfConfigFilePath(fileName, path, existingOptions, nil /*optionsRaw*/, c, c)
+		// allowNonTsExtensions has no tsconfig spelling — it is a host decision, not
+		// a project one — so it is applied to the parsed options rather than read
+		// from the config text.
+		if c.sessionOptions.AllowNonTsExtensions && entry.commandLine != nil {
+			entry.commandLine.CompilerOptions().AllowNonTsExtensions = core.TSTrue
+		}
 		c.updateExtendingConfigs(path, entry.commandLine, oldCommandLine)
 		c.updateRootFilesWatch(fileName, entry)
 		logger.Log("Finished loading config file")

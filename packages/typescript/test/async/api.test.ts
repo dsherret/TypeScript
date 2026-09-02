@@ -426,10 +426,9 @@ describe("Snapshot", () => {
         try {
             const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
             const project = snapshot.getProject("/tsconfig.json")!;
-            assert.deepEqual(project.parsedCommandLine.fileNames, ["/src/index.ts", "/src/foo.ts"]);
+            assert.deepEqual(await project.getRootFileNames(), ["/src/index.ts", "/src/foo.ts"]);
             assert.deepEqual(project.parsedCommandLine.options, { configFilePath: "/tsconfig.json" });
             assert.equal(project.parsedCommandLine.compileOnSave, true);
-            assert.deepEqual(project.rootFiles, project.parsedCommandLine.fileNames);
             assert.deepEqual(project.compilerOptions, project.parsedCommandLine.options);
         }
         finally {
@@ -5636,7 +5635,7 @@ test("Parse-clone-emit roundtrip", async () => {
             const snapshot = await api.updateSnapshot({ openProject: resolve(tsSource, tsconfig) });
             const project = snapshot.getProject(tsconfig);
             assert(project);
-            for (const file of project.rootFiles) {
+            for (const file of await project.getRootFileNames()) {
                 const source = await project.program.getSourceFile(file);
                 assert(source);
                 let clone: typeof source;

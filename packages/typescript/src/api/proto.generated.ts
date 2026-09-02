@@ -33,9 +33,11 @@ export interface APIMethodInfo {
     getTypesOfSymbols: APIMethod<GetTypesOfSymbolsParams, TypeResponse[]>;
     getDeclaredTypeOfSymbol: APIMethod<GetTypeOfSymbolParams, TypeResponse>;
     getSourceFile: APIMethod<GetSourceFileParams, SourceFileResponse | null>;
+    getSourceFileIdentity: APIMethod<GetSourceFileParams, SourceFileIdentity | null>;
     getSourceFileNames: APIMethod<GetSourceFileNamesParams, string[]>;
     getSourceFileMetadata: APIMethod<GetSourceFileParams, SourceFileMetadata | null>;
     getConfigFileNames: APIMethod<GetProjectDiagnosticsParams, string[] | null>;
+    getProjectRootFiles: APIMethod<GetProjectDiagnosticsParams, string[] | null>;
     getConfigSourceFile: APIMethod<GetSourceFileParams, SourceFileResponse | null>;
     resolveName: APIMethod<ResolveNameParams, SymbolResponse | null>;
     getSymbolsInScope: APIMethod<GetSymbolsInScopeParams, SymbolResponse[]>;
@@ -49,6 +51,7 @@ export interface APIMethodInfo {
     getMembersOfSymbol: APIMethod<GetSymbolPropertyParams, SymbolResponse[] | null>;
     getExportsOfSymbol: APIMethod<GetSymbolPropertyParams, SymbolResponse[] | null>;
     getExportSymbolOfSymbol: APIMethod<GetSymbolPropertyParams, SymbolResponse | null>;
+    getGlobalExportsOfSymbol: APIMethod<GetSymbolPropertyParams, SymbolResponse[] | null>;
     getSymbolOfType: APIMethod<GetTypePropertyParams, SymbolResponse | null>;
     getTargetOfType: APIMethod<GetTypePropertyParams, TypeResponse>;
     getFreshTypeOfType: APIMethod<GetTypePropertyParams, TypeResponse | null>;
@@ -111,6 +114,10 @@ export interface APIMethodInfo {
     getMemberInModuleExports: APIMethod<GetMemberInModuleExportsParams, SymbolResponse | null>;
     getJsDocTags: APIMethod<CheckerSymbolParams, JSDocTagInfo[] | null>;
     getDocumentationComment: APIMethod<CheckerSymbolParams, string>;
+    getJsDocTagsOfSignature: APIMethod<CheckerSignatureParams, JSDocTagInfo[] | null>;
+    getDocumentationCommentOfSignature: APIMethod<CheckerSignatureParams, string>;
+    getLocalsOfNode: APIMethod<CheckerNodeParams, SymbolResponse[] | null>;
+    getAwaitedType: APIMethod<CheckerTypeParams, TypeResponse | null>;
     isArrayType: APIMethod<CheckerTypeParams, boolean>;
     isTupleType: APIMethod<CheckerTypeParams, boolean>;
     getReferencesToSymbolInFile: APIMethod<GetReferencesToSymbolInFileParams, string[]>;
@@ -148,6 +155,19 @@ export interface APIMethodInfo {
     startCPUProfile: APIMethod<ProfileParams, void>;
     stopCPUProfile: APIMethod<null, ProfileResult>;
     saveHeapProfile: APIMethod<ProfileParams, ProfileResult>;
+    getSymbolOfDeclaration: APIMethod<GetSymbolOfDeclarationParams, SymbolResponse>;
+    getExportedSymbolsOfFiles: APIMethod<GetExportedSymbolsOfFilesParams, ExportedSymbolResponse[][]>;
+    parseSourceFile: APIMethod<ParseSourceFileParams, unknown>;
+    symbolToString: APIMethod<SymbolToStringParams, unknown>;
+    formatDocument: APIMethod<FormatDocumentParams, TextEdit[]>;
+    formatDocumentRange: APIMethod<FormatDocumentRangeParams, TextEdit[]>;
+    organizeImports: APIMethod<OrganizeImportsParams, TextEdit[]>;
+    rename: APIMethod<RenameParams, FileTextEdits[]>;
+    getDefinition: APIMethod<FilePositionParams, FileSpan[]>;
+    getImplementations: APIMethod<FilePositionParams, FileSpan[]>;
+    getCodeFixes: APIMethod<GetCodeFixesParams, CodeFixAction[]>;
+    getCombinedCodeFix: APIMethod<GetCombinedCodeFixParams, CombinedCodeActions>;
+    getAmbientModules: APIMethod<GetIntrinsicTypeParams, SymbolResponse[]>;
 }
 
 export type DocumentIdentifier = string | { uri: string; };
@@ -163,6 +183,11 @@ export interface InitializeResponse {
     useCaseSensitiveFileNames: boolean;
     /** CurrentDirectory is the server's current working directory. */
     currentDirectory: string;
+    /**
+     * Version is the compiler's own version, e.g. "7.1.0-dev". Not the version of
+     * any npm package wrapping it.
+     */
+    version: string;
 }
 
 /**
@@ -196,6 +221,11 @@ export interface UpdateSnapshotParams {
      * closed once every API client that opened it closes it.
      */
     closeFiles?: readonly DocumentIdentifier[];
+    /**
+     * RootFileChanges lists root files to add to or drop from projects the client
+     * names root files for itself rather than through a config.
+     */
+    rootFileChanges?: readonly APIProjectRootFileChanges[];
 }
 
 /** UpdateSnapshotResponse is returned by updateSnapshot. */
@@ -228,14 +258,8 @@ export interface ParseCommandLineParams {
     commandLine: readonly string[] | null;
 }
 
-export interface ConfigFileResponse {
+export interface ConfigFileResponse extends ProjectConfigResponse {
     fileNames: string[];
-    options: CompilerOptions;
-    projectReferences?: ProjectReference[];
-    typeAcquisition?: TypeAcquisition;
-    compileOnSave?: boolean;
-    raw?: unknown;
-    errors: DiagnosticResponse[];
 }
 
 export interface ReadConfigFileParams {
@@ -282,9 +306,11 @@ export interface ProjectResponse {
     id: string;
     configFileName: string;
     currentDirectory: string;
-    parsedCommandLine: ConfigFileResponse;
-    /** @deprecated Use parsedCommandLine.fileNames. */
-    rootFiles: string[];
+    /**
+     * ParsedCommandLine is the project's config, without its root file list — see
+     * NewProjectResponse for why, and getProjectRootFiles for the list.
+     */
+    parsedCommandLine: ProjectConfigResponse;
     /** @deprecated Use parsedCommandLine.options. */
     compilerOptions: CompilerOptions;
 }
@@ -412,6 +438,19 @@ export interface GetSourceFileParams {
 export interface SourceFileResponse {
     /** Data is the base64-encoded binary AST data in the encoder's format. */
     data: string;
+}
+
+/**
+ * SourceFileIdentity is which parse of a file a program is holding, without the file.
+ *
+ * The two fields are the header a source file response leads with — see
+ * encoder.SourceFileHash and encoder.ParseOptionsKey — and they are what a client's
+ * source file cache decides on. A client already holding a tree for the path asks for
+ * this instead of the file, and reuses its own copy when they match.
+ */
+export interface SourceFileIdentity {
+    contentHash: string;
+    parseOptionsKey: string;
 }
 
 export interface GetSourceFileNamesParams {
@@ -718,6 +757,12 @@ export interface ReferencedSymbolEntry {
     definition: string;
     symbol?: SymbolResponse;
     references: string[];
+    /**
+     * WriteAccess[i] reports whether References[i] is a write. DisplayParts render
+     * the definition. Both are the fork's enrichment of the reference response.
+     */
+    writeAccess?: boolean[];
+    displayParts?: DisplayPart[];
 }
 
 /** GetSignatureUsagesParams are the parameters for the getSignatureUsages method. */
@@ -792,9 +837,29 @@ export interface DiagnosticResponse {
 export interface PrintNodeParams {
     /** base64-encoded binary AST data */
     data: string;
+    /**
+     * SourceText is the text of the file the node was parsed from. Comments and
+     * original token text are read out of it, so a node printed without it prints
+     * without its comments.
+     */
+    sourceText?: string;
+    /** names the script kind SourceText is parsed as */
+    fileName?: string;
     preserveSourceNewlines?: boolean;
     neverAsciiEscape?: boolean;
     terminateUnterminatedLiterals?: boolean;
+    removeComments?: boolean;
+    /**
+     * NewLine is a core.NewLineKind: 0 leaves the printer's default (LF), 1 emits
+     * CRLF, 2 emits LF. The printer writes the line breaks, so text a line break
+     * is part of — a template literal's, say — is left alone.
+     */
+    newLine?: number;
+    /**
+     * SyntheticComments are comments the client attached to nodes rather than ones
+     * SourceText contains, addressed by the index the node was encoded at.
+     */
+    syntheticComments?: readonly NodeSyntheticComments[];
 }
 
 /** FormatNodeForInsertionParams are the parameters for the formatNodeForInsertion method. */
@@ -867,6 +932,183 @@ export interface ProfileResult {
     file: string;
 }
 
+export interface GetSymbolOfDeclarationParams {
+    snapshot: number;
+    project: string;
+    declaration: string;
+}
+
+/**
+ * GetExportedSymbolsOfFilesParams asks what a batch of files export. The batch is
+ * the point: the answer for one file is a handful of map lookups next to what a
+ * request costs, so a caller sweeping a project asks once rather than once a file.
+ */
+export interface GetExportedSymbolsOfFilesParams {
+    snapshot: number;
+    project: string;
+    files: readonly DocumentIdentifier[] | null;
+}
+
+/**
+ * ExportedSymbolResponse is one exported name together with the declarations of the
+ * symbol it is exported on.
+ *
+ * The declarations are the symbol's own, not the ones a re-export chain leads to:
+ * following an export specifier or an import to what it names is the caller's to do,
+ * and it is the caller that knows what it wants from the far end.
+ */
+export interface ExportedSymbolResponse {
+    /** The escaped (`__String`) name the symbol is exported on. */
+    name: string;
+    declarations?: string[];
+}
+
+export interface ParseSourceFileParams {
+    file: DocumentIdentifier;
+    text: string;
+    snapshot?: number;
+    project?: string;
+}
+
+/** SymbolToStringParams are the parameters for the symbolToString method. */
+export interface SymbolToStringParams {
+    snapshot: number;
+    project: string;
+    symbol: number;
+    location?: string;
+}
+
+/** FormatDocumentParams are the parameters for the formatDocument method. */
+export interface FormatDocumentParams {
+    snapshot: number;
+    project: string;
+    file: DocumentIdentifier;
+    options?: FormattingOptions;
+}
+
+/**
+ * FormatDocumentRangeParams are the parameters for the formatDocumentRange
+ * method. Pos and End are character offsets into the file.
+ */
+export interface FormatDocumentRangeParams {
+    snapshot: number;
+    project: string;
+    file: DocumentIdentifier;
+    pos: number;
+    end: number;
+    options?: FormattingOptions;
+}
+
+/** OrganizeImportsParams are the parameters for the organizeImports method. */
+export interface OrganizeImportsParams {
+    snapshot: number;
+    project: string;
+    file: DocumentIdentifier;
+    mode?: "all" | "removeUnused" | "sortAndCombine";
+}
+
+/**
+ * RenameParams are the parameters for the rename method. Position is a
+ * character offset into the file.
+ */
+export interface RenameParams {
+    snapshot: number;
+    project: string;
+    file: DocumentIdentifier;
+    position: number;
+    newName: string;
+    /**
+     * UseAliasesForRename overrides the providePrefixAndSuffixTextForRename user
+     * preference. When false, a shorthand property assignment, binding element,
+     * or import/export specifier is renamed outright rather than being given the
+     * old name as an alias. Nil leaves the snapshot's preference in place.
+     */
+    useAliasesForRename?: boolean;
+}
+
+/** FileTextEdits groups edits by the file they apply to. */
+export interface FileTextEdits {
+    fileName: string;
+    edits: TextEdit[] | null;
+}
+
+/**
+ * FilePositionParams identify a character offset within a file. They are the
+ * parameters for the getDefinition and getImplementations methods.
+ */
+export interface FilePositionParams {
+    snapshot: number;
+    project: string;
+    file: DocumentIdentifier;
+    position: number;
+}
+
+/** FileSpan is a span of a file, in character offsets. */
+export interface FileSpan {
+    fileName: string;
+    pos: number;
+    end: number;
+}
+
+/**
+ * GetCodeFixesParams are the parameters for the getCodeFixes method. Pos and End
+ * are character offsets; ErrorCodes, when non-empty, restricts the fixes to
+ * those addressing the given diagnostic codes.
+ */
+export interface GetCodeFixesParams {
+    snapshot: number;
+    project: string;
+    file: DocumentIdentifier;
+    pos: number;
+    end: number;
+    errorCodes?: readonly number[];
+    /**
+     * QuotePreference decides the quotes a fix writes a new string literal with:
+     * "single", "double", or "auto" to infer them from the file. Empty leaves the
+     * snapshot's preference in place.
+     */
+    quotePreference?: string;
+}
+
+/** CodeFixAction is a quick fix: a description plus the edits that apply it. */
+export interface CodeFixAction {
+    description: string;
+    changes: FileTextEdits[] | null;
+}
+
+/**
+ * GetCombinedCodeFixParams are the parameters for the getCombinedCodeFix
+ * method. FixId names the fix to apply across the whole file; the ids that exist
+ * today are "fixMissingImport", "fixMissingTypeAnnotationOnExports" and
+ * "fixClassIncorrectlyImplementsInterface".
+ */
+export interface GetCombinedCodeFixParams {
+    snapshot: number;
+    project: string;
+    file: DocumentIdentifier;
+    fixId: string;
+    /**
+     * Options formats the text the fix inserts. Unset fields fall back to the
+     * server's defaults, as they do for formatDocument.
+     */
+    options?: FormattingOptions;
+    /**
+     * QuotePreference decides the quotes a fix writes a new string literal with:
+     * "single", "double", or "auto" to infer them from the file. Empty leaves the
+     * snapshot's preference in place.
+     */
+    quotePreference?: string;
+}
+
+/**
+ * CombinedCodeActions is the result of getCombinedCodeFix: a description plus
+ * the edits that apply the fix everywhere it is needed.
+ */
+export interface CombinedCodeActions {
+    description: string;
+    changes: FileTextEdits[] | null;
+}
+
 /**
  * APIFileChanges describes file changes to apply when updating a snapshot.
  * Either InvalidateAll is true (discard all caches) or Changed/Created/Deleted
@@ -877,6 +1119,20 @@ export interface APIFileChanges {
     changed?: DocumentIdentifier[];
     created?: DocumentIdentifier[];
     deleted?: DocumentIdentifier[];
+}
+
+/**
+ * APIProjectRootFileChanges names root files for a project directly, rather than
+ * through the project's config. They are appended to whatever the config resolved, and
+ * persist across snapshots until the project is closed.
+ */
+export interface APIProjectRootFileChanges {
+    /** Project is the project, named by the config file it was opened with. */
+    project: DocumentIdentifier;
+    /** Added lists root files to append, in the order they should be appended. */
+    added?: string[];
+    /** Removed lists root files to drop. */
+    removed?: string[];
 }
 
 /**
@@ -895,6 +1151,27 @@ export interface SnapshotChanges {
      * snapshot but absent from the new one.
      */
     removedProjects?: string[];
+}
+
+/**
+ * ProjectConfigResponse is a config as a project reports it: everything a
+ * ConfigFileResponse holds except the root file list, which a project's
+ * description leaves off — see NewProjectResponse.
+ */
+export interface ProjectConfigResponse {
+    options: CompilerOptions;
+    projectReferences?: ProjectReference[];
+    typeAcquisition?: TypeAcquisition;
+    compileOnSave?: boolean;
+    raw?: unknown;
+    /** Errors are the diagnostics produced while parsing the config file. */
+    errors: DiagnosticResponse[];
+}
+
+export interface TranspileOptions {
+    compilerOptions?: CompilerOptions;
+    fileName?: string;
+    reportDiagnostics?: boolean;
 }
 
 /** CompilerOptions contains the compiler options exposed by the API. */
@@ -1003,32 +1280,15 @@ export interface CompilerOptions {
     configFilePath?: string;
 }
 
-export interface ProjectReference {
-    /** Path is a normalized path on disk. */
-    path: string;
-    /** OriginalPath is the path as it was originally written. */
-    originalPath: string;
-    /** Circular indicates that this reference is intended to form a circularity. */
-    circular: boolean;
-}
-
-export interface TypeAcquisition {
-    enable?: boolean;
-    include?: string[];
-    exclude?: string[];
-    disableFilenameBasedTypeAcquisition?: boolean;
-}
-
-export interface TranspileOptions {
-    compilerOptions?: CompilerOptions;
-    fileName?: string;
-    reportDiagnostics?: boolean;
-}
-
 export interface ImportAdderAction {
     kind: "importSymbol";
     symbol?: number;
     isValidTypeOnlyUseSite?: boolean;
+}
+
+export interface DisplayPart {
+    text: string;
+    kind: string;
 }
 
 /** CompletionEntryResponse represents a single completion item. */
@@ -1053,10 +1313,42 @@ export interface DiagnosticSourceLineResponse {
     text: string;
 }
 
+/** NodeSyntheticComments are the comments a client attached to one encoded node. */
+export interface NodeSyntheticComments {
+    node: number;
+    leading?: SyntheticComment[];
+    trailing?: SyntheticComment[];
+}
+
 export interface EmitOutputFile {
     fileName: string;
     text: string;
     sourceFileName?: string;
+    /**
+     * WriteByteOrderMark reports that the file is to be written with a UTF-8 byte
+     * order mark. Text is reported without it, the way ts.OutputFile did.
+     */
+    writeByteOrderMark?: boolean;
+}
+
+/**
+ * FormattingOptions configures the formatter. Unset fields fall back to the
+ * server's configured defaults.
+ */
+export interface FormattingOptions {
+    tabSize?: number;
+    insertSpaces?: boolean;
+    trimTrailingWhitespace?: boolean;
+    /**
+     * The three below are honoured by the formatter but cannot be expressed in an
+     * LSP FormattingOptions, so they are carried separately: IndentSize is the
+     * indentation step (defaulting to TabSize), IndentStyle is lsutil.IndentStyle
+     * (0 none, 1 block, 2 smart), and NewLineCharacter is the line ending inserted
+     * text is written with.
+     */
+    indentSize?: number;
+    indentStyle?: number;
+    newLineCharacter?: string;
 }
 
 /** ProjectFileChanges describes what source files changed within a single project. */
@@ -1067,8 +1359,33 @@ export interface ProjectFileChanges {
     deletedFiles?: string[];
 }
 
+export interface ProjectReference {
+    /** Path is a normalized path on disk. */
+    path: string;
+    /** OriginalPath is the path as it was originally written. */
+    originalPath: string;
+    /** Circular indicates that this reference is intended to form a circularity. */
+    circular: boolean;
+}
+
+export interface TypeAcquisition {
+    enable?: boolean;
+    include?: string[];
+    exclude?: string[];
+    disableFilenameBasedTypeAcquisition?: boolean;
+}
+
 /** CompletionEntryLabelDetailsResponse holds additional label display text for a completion entry. */
 export interface CompletionEntryLabelDetailsResponse {
     detail?: string;
     description?: string;
+}
+
+/** SyntheticComment is a comment carried on a node instead of read from a file. */
+export interface SyntheticComment {
+    /** Kind is an ast.Kind: SingleLineCommentTrivia or MultiLineCommentTrivia. */
+    kind: number;
+    text: string;
+    hasTrailingNewLine?: boolean;
+    hasLeadingNewline?: boolean;
 }

@@ -189,7 +189,7 @@ func requestSemanticDiagnostics(t *testing.T, session *Session, fileName string)
 	diagnostics, err := session.handleGetSemanticDiagnostics(ctx, &GetDiagnosticsParams{
 		Snapshot: snapshotResp.Snapshot,
 		Project:  proj.Id,
-		File:     &DocumentIdentifier{FileName: fileName},
+		Files:    []DocumentIdentifier{{FileName: fileName}},
 	})
 	assert.NilError(t, err)
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/TypeScript/tsc/internal/bundled"
+	"github.com/microsoft/TypeScript/tsc/internal/ipc"
 	"github.com/microsoft/TypeScript/tsc/internal/json"
 	"github.com/microsoft/TypeScript/tsc/internal/vfs/vfstest"
 	"gotest.tools/v3/assert"
@@ -58,7 +59,7 @@ type notFoundConn struct {
 	calls int
 }
 
-var _ Conn = (*notFoundConn)(nil)
+var _ ipc.Conn = (*notFoundConn)(nil)
 
 func (c *notFoundConn) Call(ctx context.Context, method string, params any) (json.Value, error) {
 	c.calls++

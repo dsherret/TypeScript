@@ -129,12 +129,26 @@ function encodeFileReferences(refs: readonly FileReference[] | undefined, writer
     return offset;
 }
 
+/**
+ * The name a source file is encoded under.
+ *
+ * The decoder rebuilds the file with `ast.NodeFactory.NewSourceFile`, which
+ * panics on a name that is not absolute and normalized, and a file whose name
+ * the caller chose is under no such constraint. Only the script kind is read off
+ * the name on the other side, so a bare name is rooted rather than rejected.
+ */
+export function rootedFileName(fileName: string): string {
+    const normalized = fileName.replaceAll("\\", "/");
+    if (normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized) || /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(normalized)) return normalized;
+    return "/" + normalized;
+}
+
 function recordExtendedData(node: Node, strs: StringTable, extendedData: number[], structuredWriter: MsgpackWriter): number {
     const offset = extendedData.length * 4;
     if (node.kind === SyntaxKind.SourceFile) {
         const sf = node as SourceFile;
         const textIndex = strs.add(sf.text);
-        const fileNameIndex = strs.add(sf.fileName);
+        const fileNameIndex = strs.add(rootedFileName(sf.fileName));
         const pathIndex = strs.add(sf.path);
         const referencedFilesOffset = encodeFileReferences(sf.referencedFiles, structuredWriter);
         const typeRefDirectivesOffset = encodeFileReferences(sf.typeReferenceDirectives, structuredWriter);
@@ -201,8 +215,12 @@ export function encodeSourceFile(sourceFile: SourceFile): Uint8Array {
 /**
  * Encode an arbitrary AST node into the binary format.
  * When encoding a non-SourceFile node, the header hash and parse options fields will be zero.
+ *
+ * `nodeIndices`, when given, is filled with the index each node was written at.
+ * That is how anything carried beside the tree — synthetic comments, say — names
+ * the node it belongs to, since the decoder rebuilds the same indices.
  */
-export function encodeNode(node: Node): Uint8Array {
+export function encodeNode(node: Node, nodeIndices?: Map<Node, number>): Uint8Array {
     const strs = new StringTable();
     const extendedDataValues: number[] = [];
     const structuredWriter = new MsgpackWriter();
@@ -220,6 +238,7 @@ export function encodeNode(node: Node): Uint8Array {
     function visitNode(node: Node): void {
         nodeCount++;
         const currentIndex = nodeCount;
+        nodeIndices?.set(node, currentIndex);
 
         if (prevIndex !== 0) {
             // Set next pointer on previous sibling
@@ -304,6 +323,7 @@ export function encodeNode(node: Node): Uint8Array {
     // Encode root node
     nodeCount++;
     parentIndex++;
+    nodeIndices?.set(node, 1);
     const rootData = getNodeData(node, strs, extendedDataValues, structuredWriter);
     nodeValues.push(
         node.kind,

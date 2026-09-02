@@ -604,17 +604,20 @@ func (s *snapshotFSBuilder) isRelevantFileName(uri lsproto.DocumentUri, contentM
 	if _, ok := s.overlays[path]; ok {
 		return true
 	}
-	i := strings.LastIndexByte(string(path), '.')
-	if i < 0 {
-		return false
+	if i := strings.LastIndexByte(string(path), '.'); i >= 0 && isRelevantExtension(string(path)[i:]) {
+		return true
 	}
-	return isRelevantExtension(string(path)[i:])
+	// A file already read into the snapshot is relevant whatever its name says: a
+	// host that names the project's files itself can put any extension, or none,
+	// in the program, and a change to one of those still has to invalidate it.
+	_, ok := s.diskFiles.Load(path)
+	return ok
 }
 
 // isRelevantExtension returns true if the given extension is a known TypeScript
 // or JavaScript extension that can affect the project.
 func isRelevantExtension(ext string) bool {
-	switch ext {
+	switch strings.ToLower(ext) {
 	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".json":
 		return true
 	}

@@ -565,13 +565,59 @@ func (r *typeRenderer) inlineStruct(structType *types.Struct) string {
 		multiline = multiline || doc != ""
 		fields = append(fields, fmt.Sprintf("%s%s%s: %s", inlineDoc(doc), propertyName(field), optionalMarker(optional), fieldType))
 	}
+	embedded := r.embeddedStructs(structType)
 	if len(fields) == 0 {
-		return "Record<string, never>"
+		if len(embedded) == 0 {
+			return "Record<string, never>"
+		}
+		return strings.Join(embedded, " & ")
 	}
+	var literal string
 	if multiline {
-		return "{\n" + strings.Join(fields, ";\n") + ";\n}"
+		literal = "{\n" + strings.Join(fields, ";\n") + ";\n}"
+	} else {
+		literal = "{ " + strings.Join(fields, "; ") + "; }"
 	}
-	return "{ " + strings.Join(fields, "; ") + "; }"
+	if len(embedded) == 0 {
+		return literal
+	}
+	return strings.Join(append(embedded, literal), " & ")
+}
+
+// embeddedStructs names the struct types a struct embeds, queuing each for its own
+// declaration. encoding/json flattens an embedded struct's fields into the embedding
+// struct's object, so the TypeScript type extends the embedded type rather than
+// holding it as a property.
+func (r *typeRenderer) embeddedStructs(structType *types.Struct) []string {
+	var names []string
+	for i := range structType.NumFields() {
+		if named := flattenedEmbedding(structType, i); named != nil {
+			names = append(names, r.namedType(named))
+		}
+	}
+	return names
+}
+
+// flattenedEmbedding returns the named struct type field i embeds when encoding/json
+// flattens its fields into the enclosing object, and nil for every other field: a
+// non-embedded one, an embedded non-struct, or an embedded struct given its own json
+// name, which encoding/json keeps as a property.
+func flattenedEmbedding(structType *types.Struct, index int) *types.Named {
+	field := structType.Field(index)
+	if !field.Embedded() {
+		return nil
+	}
+	named, ok := types.Unalias(field.Type()).(*types.Named)
+	if !ok {
+		return nil
+	}
+	if _, ok := named.Underlying().(*types.Struct); !ok {
+		return nil
+	}
+	if name, _, _ := strings.Cut(reflect.StructTag(structType.Tag(index)).Get("json"), ","); name != "" {
+		return nil
+	}
+	return named
 }
 
 func inlineDoc(doc string) string {
@@ -594,7 +640,11 @@ func (r *typeRenderer) declarations() (string, error) {
 		structType := named.Underlying().(*types.Struct)
 		isParams := strings.HasSuffix(named.Obj().Name(), "Params")
 		writeDoc(&out, "", r.docs[named.Obj()])
-		fmt.Fprintf(&out, "export interface %s {\n", exportedName(named.Obj().Name()))
+		if embedded := r.embeddedStructs(structType); len(embedded) > 0 {
+			fmt.Fprintf(&out, "export interface %s extends %s {\n", exportedName(named.Obj().Name()), strings.Join(embedded, ", "))
+		} else {
+			fmt.Fprintf(&out, "export interface %s {\n", exportedName(named.Obj().Name()))
+		}
 		for i := range structType.NumFields() {
 			field, include, optional, nonnil, deprecated, internal := jsonField(structType, i)
 			if !include || deprecated || internal {
@@ -624,7 +674,13 @@ func writeDoc(out *bytes.Buffer, indent string, doc string) {
 	}
 	fmt.Fprintf(out, "%s/**\n", indent)
 	for _, line := range lines {
-		fmt.Fprintf(out, "%s * %s\n", indent, jsDocLine(line))
+		// a blank line is ` *`, not ` * `: the formatter strips the trailing space, and
+		// the generated file should not change under it
+		if text := jsDocLine(line); text == "" {
+			fmt.Fprintf(out, "%s *\n", indent)
+		} else {
+			fmt.Fprintf(out, "%s * %s\n", indent, text)
+		}
 	}
 	fmt.Fprintf(out, "%s */\n", indent)
 }
@@ -672,6 +728,11 @@ func (r *typeRenderer) referencedNames() []string {
 func jsonField(structType *types.Struct, index int) (name string, include bool, optional bool, nonnil bool, deprecated bool, internal bool) {
 	field := structType.Field(index)
 	if !field.Exported() {
+		return "", false, false, false, false, false
+	}
+	// an embedded struct's fields are flattened into this one, and the type is
+	// rendered as an extends clause — see embeddedStructs
+	if flattenedEmbedding(structType, index) != nil {
 		return "", false, false, false, false, false
 	}
 	tag := reflect.StructTag(structType.Tag(index)).Get("json")

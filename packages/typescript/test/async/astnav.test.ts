@@ -89,6 +89,22 @@ describe("astnav", () => {
 
     if (!fileText) return;
 
+    // A JSDoc node starts at its `/**` here where Go starts it at the node's full
+    // start (see getDocCommentStart in node.infrastructure.ts). So the positions in
+    // a JSDoc's leading trivia, which Go's tree gives to the JSDoc and this one
+    // gives to no JSDoc, are not compared: nothing that starts from the token at
+    // such a position can agree with the baseline there.
+    const inJSDocTrivia = new Set<number>();
+    {
+        const runs: TokenRun[] = JSON.parse(readFileSync(resolve(baselineDir, "GetTokenAtPosition.mapCode.ts.baseline.json"), "utf-8"));
+        for (const run of runs) {
+            if (run.kind !== "JSDoc") continue;
+            const docStart = fileText.lastIndexOf("/**", run.nodeEnd);
+            assert.ok(docStart >= run.nodePos, `no /** opens the JSDoc ending at ${run.nodeEnd}`);
+            for (let p = run.startPos; p <= run.endPos && p < docStart; p++) inJSDocTrivia.add(p);
+        }
+    }
+
     // Use the Go API to parse the file — the resulting SourceFile is already
     // in our SyntaxKind/NodeFlags enum space with correct JSDoc structure.
     let api: API;
@@ -149,7 +165,7 @@ describe("astnav", () => {
                 const node = tc.fn(sourceFile, pos);
                 const goExpected = expected.get(pos);
 
-                if (!goExpected) continue;
+                if (!goExpected || inJSDocTrivia.has(pos)) continue;
 
                 if (node === undefined) {
                     failures.push(
@@ -162,10 +178,17 @@ describe("astnav", () => {
                     continue;
                 }
 
+                // where Go answers with a JSDoc, the expected start is its `/**`
+                let expectedPos = goExpected.pos;
+                if (goExpected.kind === "JSDoc") {
+                    expectedPos = fileText.lastIndexOf("/**", goExpected.end);
+                    assert.ok(expectedPos >= goExpected.pos, `pos ${pos}: no /** opens the JSDoc ending at ${goExpected.end}`);
+                }
+
                 const result = toTokenInfo(node);
-                if (result.kind !== goExpected.kind || result.pos !== goExpected.pos || result.end !== goExpected.end) {
+                if (result.kind !== goExpected.kind || result.pos !== expectedPos || result.end !== goExpected.end) {
                     failures.push(
-                        `  pos ${pos}: expected ${goExpected.kind} [${goExpected.pos}, ${goExpected.end}), ` +
+                        `  pos ${pos}: expected ${goExpected.kind} [${expectedPos}, ${goExpected.end}), ` +
                             `got ${result.kind} [${result.pos}, ${result.end})`,
                     );
                     if (failures.length >= 50) {

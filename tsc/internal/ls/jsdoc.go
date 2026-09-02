@@ -83,7 +83,7 @@ func GetSymbolJSDocTags(symbol *ast.Symbol) []JSDocTagInfo {
 // GetSignatureDocumentationComment renders the documentation comment of a signature's
 // declaration as plain text. A signature has no symbol of its own, so this is keyed on the
 // declaration the way signature help already renders it.
-func (l *LanguageService) GetSignatureDocumentationComment(c *checker.Checker, declaration *ast.Node) string {
+func GetSignatureDocumentationComment(c *checker.Checker, declaration *ast.Node) string {
 	if declaration == nil {
 		return ""
 	}
@@ -92,7 +92,7 @@ func (l *LanguageService) GetSignatureDocumentationComment(c *checker.Checker, d
 
 // GetSignatureJSDocTags collects the JSDoc tags on a signature's declaration, rendering each
 // tag's text as a plain string the same way GetSymbolJSDocTags does.
-func (l *LanguageService) GetSignatureJSDocTags(declaration *ast.Node) []JSDocTagInfo {
+func GetSignatureJSDocTags(declaration *ast.Node) []JSDocTagInfo {
 	if declaration == nil {
 		return nil
 	}

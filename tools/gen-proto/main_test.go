@@ -30,6 +30,7 @@ func TestGenerate(t *testing.T) {
 		`initialize: APIMethod<null, InitializeResponse>;`,
 		`export type DocumentIdentifier = string | { uri: string; };`,
 		`export interface ReleaseParams`,
+		`export interface ConfigFileResponse extends ProjectConfigResponse {`,
 		`export interface UpdateSnapshotParams`,
 		`openProjects?: readonly DocumentIdentifier[];`,
 		`snapshot: number;`,

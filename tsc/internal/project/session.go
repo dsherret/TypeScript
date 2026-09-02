@@ -1448,28 +1448,7 @@ func (s *Session) updateSnapshotRef(ctx context.Context, overlays map[tspath.Pat
 }
 
 func (s *Session) updateSnapshot(ctx context.Context, overlays map[tspath.Path]*Overlay, change SnapshotChange, callerRef bool) *Snapshot {
-	s.snapshotMu.Lock()
-	oldSnapshot := s.snapshot
-	newSnapshot := oldSnapshot.Clone(ctx, change, overlays, s)
-	// Building the new snapshot's programs is the parse cache lookup the offered trees
-	// were being held for: each has now either been taken over by a program that holds
-	// its own reference or was keyed for a build that did not come. Either way nothing
-	// else is waiting, so let the offers go.
-	s.releaseOfferedFiles()
-	s.snapshot = newSnapshot
-	if callerRef {
-		newSnapshot.ref()
-	}
-	var contentMapperTimings contentmapper.Timings
-	if newSnapshot != oldSnapshot {
-		// Release the session's reference to the old snapshot. The new snapshot's
-		// clone ref (1) is transferred to become the session's ref for its current
-		// snapshot. Other holders (e.g. active handlers) keep the old snapshot alive
-		// via their own refs until they complete.
-		oldSnapshot.Deref(s)
-		contentMapperTimings = s.takeContentMapperTimingDelta()
-	}
-	s.snapshotMu.Unlock()
+	oldSnapshot, newSnapshot, contentMapperTimings := s.swapSnapshot(ctx, overlays, change, callerRef)
 
 	// Enqueue ATA updates if needed
 	if s.typingsInstaller != nil && !s.Config().IsATADisabled() {
@@ -1552,6 +1531,41 @@ func hasContentMapperOperationTimings(timings map[string]contentmapper.MapperTim
 
 func hasContentMapperOperationTiming(timing contentmapper.MapperTimings) bool {
 	return timing.Spawn.Count != 0 || timing.OpenProject.Count != 0 || timing.CloseProject.Count != 0 || timing.Transform.Count != 0
+}
+
+// swapSnapshot clones the current snapshot under snapshotMu and installs the
+// result, returning the old and new snapshots and the content mapper timings
+// the clone accrued.
+//
+// It exists so the unlock can be deferred without holding the lock across the
+// background work updateSnapshot queues afterwards. Cloning parses files, which
+// can panic — a failing filesystem callback, for instance — and an unlock that
+// only runs on the success path would leave snapshotMu held forever, deadlocking
+// every later request even though the panic itself was recovered.
+func (s *Session) swapSnapshot(ctx context.Context, overlays map[tspath.Path]*Overlay, change SnapshotChange, callerRef bool) (oldSnapshot, newSnapshot *Snapshot, contentMapperTimings contentmapper.Timings) {
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+
+	oldSnapshot = s.snapshot
+	newSnapshot = oldSnapshot.Clone(ctx, change, overlays, s)
+	// Building the new snapshot's programs is the parse cache lookup the offered trees
+	// were being held for: each has now either been taken over by a program that holds
+	// its own reference or was keyed for a build that did not come. Either way nothing
+	// else is waiting, so let the offers go.
+	s.releaseOfferedFiles()
+	s.snapshot = newSnapshot
+	if callerRef {
+		newSnapshot.ref()
+	}
+	if newSnapshot != oldSnapshot {
+		// Release the session's reference to the old snapshot. The new snapshot's
+		// clone ref (1) is transferred to become the session's ref for its current
+		// snapshot. Other holders (e.g. active handlers) keep the old snapshot alive
+		// via their own refs until they complete.
+		oldSnapshot.Deref(s)
+		contentMapperTimings = s.takeContentMapperTimingDelta()
+	}
+	return oldSnapshot, newSnapshot, contentMapperTimings
 }
 
 // WaitForBackgroundTasks waits for all background tasks to complete.

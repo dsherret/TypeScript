@@ -91,6 +91,16 @@ export interface Node extends ReadonlyTextRange {
     readonly parent: Node;
     readonly jsDoc?: readonly Node[] | undefined;
     forEachChild<T>(visitor: (node: Node) => T, visitArray?: (nodes: NodeArray<Node>) => T): T | undefined;
+    /**
+     * Returns every child in source order, including the punctuation/keyword
+     * tokens and the `SyntaxList` nodes the tree does not store. See the free
+     * {@link getChildren} in ./children.ts, which this delegates to.
+     */
+    getChildren(sourceFile?: SourceFile): Node[];
+    getChildCount(sourceFile?: SourceFile): number;
+    getChildAt(index: number, sourceFile?: SourceFile): Node;
+    getFirstToken(sourceFile?: SourceFile): Node | undefined;
+    getLastToken(sourceFile?: SourceFile): Node | undefined;
     getSourceFile(): SourceFile;
     getStart(sourceFile?: SourceFile, includeJsDocComment?: boolean): number;
     getFullStart(): number;

@@ -663,6 +663,7 @@ function generateFactory(): string {
     }
     out.push(`} from "./ast.ts";`);
     out.push(`import { getTokenPosOfNode } from "./astnav.ts";`);
+    out.push(`import { getChildren, getFirstToken, getLastToken } from "./children.ts";`);
     if (handWrittenCloneHelpers.length > 0) {
         out.push(`import {`);
         for (const helperName of [...new Set(handWrittenCloneHelpers.map(h => h.helperName))].sort((a, b) => a.localeCompare(b))) {
@@ -725,6 +726,26 @@ function generateFactory(): string {
     out.push(`        let node: Node = this as unknown as Node;`);
     out.push(`        while (node.parent) node = node.parent;`);
     out.push(`        return node as unknown as SourceFile;`);
+    out.push(`    }`);
+    out.push(``);
+    out.push(`    getChildren(sourceFile?: SourceFile): Node[] {`);
+    out.push(`        return getChildren(this as unknown as Node, sourceFile ?? this.getSourceFile());`);
+    out.push(`    }`);
+    out.push(``);
+    out.push(`    getChildCount(sourceFile?: SourceFile): number {`);
+    out.push(`        return this.getChildren(sourceFile).length;`);
+    out.push(`    }`);
+    out.push(``);
+    out.push(`    getChildAt(index: number, sourceFile?: SourceFile): Node {`);
+    out.push(`        return this.getChildren(sourceFile)[index];`);
+    out.push(`    }`);
+    out.push(``);
+    out.push(`    getFirstToken(sourceFile?: SourceFile): Node | undefined {`);
+    out.push(`        return getFirstToken(this as unknown as Node, sourceFile ?? this.getSourceFile());`);
+    out.push(`    }`);
+    out.push(``);
+    out.push(`    getLastToken(sourceFile?: SourceFile): Node | undefined {`);
+    out.push(`        return getLastToken(this as unknown as Node, sourceFile ?? this.getSourceFile());`);
     out.push(`    }`);
     out.push(``);
     out.push(`    getStart(sourceFile?: SourceFile, includeJsDocComment?: boolean): number {`);

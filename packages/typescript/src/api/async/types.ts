@@ -379,6 +379,8 @@ export interface FormatDiagnosticsHost {
 export interface EmitOutputFile {
     readonly text: string;
     readonly sourceFileName?: string | undefined;
+    /** Whether the file is to be written with a UTF-8 byte order mark; `text` is reported without it. */
+    readonly writeByteOrderMark?: boolean | undefined;
 }
 
 export interface EmitResult {

@@ -1,4 +1,3 @@
-import type { TextEdit } from "./proto.generated.ts";
 import {
     documentURIToFileName,
     fileNameToDocumentURI,
@@ -12,7 +11,7 @@ import type {
     TypeResponse,
     UpdateSnapshotParams as CoreUpdateSnapshotParams,
 } from "./proto.generated.ts";
-export type { ConfigFileResponse as ParsedCommandLine, DiagnosticResponse as Diagnostic } from "./proto.generated.ts";
+export type { APIProjectRootFileChanges as ProjectRootFileChanges, ConfigFileResponse as ParsedCommandLine, DiagnosticResponse as Diagnostic, DiagnosticResponse as ProtoDiagnostic, ProjectConfigResponse as ProjectConfig } from "./proto.generated.ts";
 
 export * from "./proto.generated.ts";
 
@@ -96,47 +95,16 @@ export function toUpdateSnapshotRequest(params?: UpdateSnapshotParams): UpdateSn
     };
 }
 
-
-/** Edits grouped by the file they apply to. */
-export interface FileTextEdits {
-    fileName: string;
-    edits: TextEdit[];
-}
-
-/** A quick fix: a description plus the edits that apply it. */
-export interface CodeFixAction {
-    description: string;
-    changes: FileTextEdits[];
-}
-
-/** The result of applying one fix id across a whole file. */
-export interface CombinedCodeActions {
-    description: string;
-    changes: FileTextEdits[];
-}
-
-/** A span of a file, in character offsets. */
-export interface FileSpan {
-    fileName: string;
-    pos: number;
-    end: number;
-}
-
-/** Formatter settings. Unset fields fall back to the server's defaults. */
-export interface FormattingOptions {
-    tabSize?: number;
-    insertSpaces?: boolean;
-    trimTrailingWhitespace?: boolean;
-    indentSize?: number;
-    indentStyle?: number;
-    newLineCharacter?: string;
-}
-
+/**
+ * Which import transformations `Project.organizeImports` applies.
+ * - `"all"` sorts, combines, and removes unused imports.
+ * - `"sortAndCombine"` sorts and combines, keeping unused imports.
+ * - `"removeUnused"` only removes unused imports.
+ */
 export type OrganizeImportsMode = "all" | "sortAndCombine" | "removeUnused";
 
+/**
+ * The quotes a code fix writes a new string literal with.
+ * - `"auto"` infers them from the string literals already in the file.
+ */
 export type QuotePreference = "auto" | "double" | "single";
-
-export interface ExportedSymbolResponse {
-    name: string;
-    declarations?: string[];
-}
