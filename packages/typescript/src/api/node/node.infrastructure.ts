@@ -203,12 +203,12 @@ export class RemoteNodeBase {
      * Returns every child in source order, including the tokens and
      * `SyntaxList` nodes the tree does not store.
      *
-     * The free function does the work; it lives in ../../ast/children.ts
+     * The free function does the work; it lives in ../../ast/astnav.ts
      * because it is about the AST rather than about the wire format. `this` is
      * always a RemoteNode at runtime — only that subclass is constructed —
      * which is why getSourceFile is reachable here.
      */
-    getChildren(sourceFile?: SourceFile): Node[] {
+    getChildren(sourceFile?: SourceFile): readonly Node[] {
         const node = this as unknown as Node;
         return getChildren(node, sourceFile ?? node.getSourceFile());
     }

@@ -94,9 +94,9 @@ export interface Node extends ReadonlyTextRange {
     /**
      * Returns every child in source order, including the punctuation/keyword
      * tokens and the `SyntaxList` nodes the tree does not store. See the free
-     * {@link getChildren} in ./children.ts, which this delegates to.
+     * {@link getChildren} in ./astnav.ts, which this delegates to.
      */
-    getChildren(sourceFile?: SourceFile): Node[];
+    getChildren(sourceFile?: SourceFile): readonly Node[];
     getChildCount(sourceFile?: SourceFile): number;
     getChildAt(index: number, sourceFile?: SourceFile): Node;
     getFirstToken(sourceFile?: SourceFile): Node | undefined;
@@ -169,6 +169,8 @@ export interface SourceFile extends Node {
     getPositionOfLineAndCharacter(line: number, character: number): number;
     /** @internal */
     tokenCache?: Map<string, Node>;
+    /** @internal */
+    childrenCache?: Map<Node, readonly Node[]>;
 }
 
 // ── Token hierarchy ──
