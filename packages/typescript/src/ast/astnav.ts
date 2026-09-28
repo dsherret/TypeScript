@@ -727,8 +727,15 @@ function addSyntheticNodes(children: Node[], pos: number, end: number, parent: N
         const token = scanner.getToken();
         const tokenEnd = scanner.getTokenEnd();
         if (tokenEnd <= end) {
+            // Classic TypeScript rescans with a scanner that has no combined `</`, so a
+            // JSX closing tag comes back as two children. This scanner produces one;
+            // split it, or a closing tag has one child fewer than every caller expects.
+            if (token === SyntaxKind.LessThanSlashToken) {
+                children.push(getOrCreateToken(sourceFile, SyntaxKind.LessThanToken, pos, pos + 1, parent, scanner.getTokenFlags()));
+                children.push(getOrCreateToken(sourceFile, SyntaxKind.SlashToken, pos + 1, tokenEnd, parent, scanner.getTokenFlags()));
+            }
             // An identifier should never appear as trivia between AST children; skip defensively.
-            if (token !== SyntaxKind.Identifier) {
+            else if (token !== SyntaxKind.Identifier) {
                 children.push(getOrCreateToken(sourceFile, token, pos, tokenEnd, parent, scanner.getTokenFlags()));
             }
         }

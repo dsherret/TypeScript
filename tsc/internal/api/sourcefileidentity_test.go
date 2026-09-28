@@ -2,15 +2,21 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"testing"
 
 	"github.com/microsoft/TypeScript/tsc/internal/api/encoder"
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
 	"github.com/microsoft/TypeScript/tsc/internal/bundled"
+	"github.com/microsoft/TypeScript/tsc/internal/compiler"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
+	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
 	"github.com/microsoft/TypeScript/tsc/internal/parser"
+	"github.com/microsoft/TypeScript/tsc/internal/project"
+	"github.com/microsoft/TypeScript/tsc/internal/testutil/projecttestutil"
 	"github.com/microsoft/TypeScript/tsc/internal/tspath"
 	"gotest.tools/v3/assert"
 )
@@ -142,60 +148,6 @@ func TestGetSourceFileIdentityUnderAPackageScope(t *testing.T) {
 	assert.Equal(t, identity.ParseOptionsKey, "2")
 }
 
-// TestGetSourceFileIdentityNamesTheTreeTheClientAlreadyHas is the reuse the endpoint
-// exists for, end to end and with object identity as the evidence.
-//
-// The client parses text through ParseSourceFile and holds the tree; the program is then
-// built over that text and takes *that very tree* rather than one of its own, which is the
-// `assert.Equal` on pointers below. The identity the endpoint then answers with is the
-// header of the response the client already has — so a client that compares the two and
-// keeps its own copy is holding the program's own tree, not merely an equal one.
-func TestGetSourceFileIdentityNamesTheTreeTheClientAlreadyHas(t *testing.T) {
-	t.Parallel()
-	if !bundled.Embedded {
-		t.Skip("bundled files are not embedded")
-	}
-
-	const fileName = "/p/a.ts"
-	s := newParseSession(t, map[string]string{fileName: "export const a = 1;\n"}, nil)
-	defer s.close()
-
-	const edited = "export const a = 2;\n"
-	offered := s.offer(t, fileName, edited)
-	s.commit(t, fileName, edited)
-
-	fromProgram := s.program().GetSourceFileByPath(tspath.Path(fileName))
-	assert.Equal(t, fromProgram, offered)
-
-	identity := assertIdentityMatchesGetSourceFile(t, s, fileName)
-	assert.Equal(t, identity.ContentHash, encoder.SourceFileHash(offered))
-	assert.Equal(t, identity.ParseOptionsKey, encoder.ParseOptionsKey(offered))
-}
-
-// TestGetSourceFileIdentityDisownsASupersededTree is the other half: a client holding a
-// tree the program did *not* take has to be told so, and told so by these two values
-// alone. Here the text that reached the compiler is not the text the client parsed, so the
-// program parses its own tree and the hash the endpoint answers with is not the client's.
-func TestGetSourceFileIdentityDisownsASupersededTree(t *testing.T) {
-	t.Parallel()
-	if !bundled.Embedded {
-		t.Skip("bundled files are not embedded")
-	}
-
-	const fileName = "/p/a.ts"
-	s := newParseSession(t, map[string]string{fileName: "export const a = 1;\n"}, nil)
-	defer s.close()
-
-	offered := s.offer(t, fileName, "export const a = 2;\n")
-	s.commit(t, fileName, "export const a = 3;\n")
-
-	fromProgram := s.program().GetSourceFileByPath(tspath.Path(fileName))
-	assert.Assert(t, fromProgram != offered)
-
-	identity := assertIdentityMatchesGetSourceFile(t, s, fileName)
-	assert.Assert(t, identity.ContentHash != encoder.SourceFileHash(offered))
-}
-
 // TestGetSourceFileIdentityOfAFileTheProgramLacks answers nil, which is what getSourceFile
 // answers with too — so a client that asked this first and stopped there did not skip an
 // answer it would otherwise have got.
@@ -261,4 +213,85 @@ func headerContentHash(data []byte) string {
 // readParseOptionsKey does on the client.
 func headerParseOptionsKey(data []byte) string {
 	return fmt.Sprintf("%d", binary.LittleEndian.Uint32(data[encoder.HeaderOffsetParseOptions:]))
+}
+
+const parseSessionConfigFileName = "/p/tsconfig.json"
+
+// parseSession is a session with one configured project open, which is all these tests
+// need: a snapshot to ask getSourceFileIdentity of, and a program to compare it with.
+type parseSession struct {
+	session   *Session
+	project   *project.Session
+	utils     *projecttestutil.SessionUtils
+	snapshot  SnapshotID
+	projectID project.ID
+}
+
+func newParseSession(t *testing.T, files map[string]string, compilerOptions map[string]any) *parseSession {
+	t.Helper()
+	if compilerOptions == nil {
+		compilerOptions = map[string]any{}
+	}
+	roots := make([]string, 0, len(files))
+	initial := map[string]any{}
+	for name, text := range files {
+		initial[name] = text
+		if name != "/p/package.json" {
+			roots = append(roots, name)
+		}
+	}
+	configText, err := json.Marshal(map[string]any{"compilerOptions": compilerOptions, "files": roots})
+	assert.NilError(t, err)
+	initial[parseSessionConfigFileName] = string(configText)
+
+	projectSession, utils := projecttestutil.SetupWithOptions(initial, &project.SessionOptions{
+		CurrentDirectory:   "/",
+		DefaultLibraryPath: bundled.LibPath(),
+		PositionEncoding:   lsproto.PositionEncodingKindUTF8,
+	})
+	s := &parseSession{session: NewLSPSession(projectSession, nil), project: projectSession, utils: utils}
+	response, err := s.session.handleCreateSnapshot(context.Background(), &CreateSnapshotParams{
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenProjects:   []DocumentIdentifier{{FileName: parseSessionConfigFileName}},
+			EnsurePrograms: &EnsurePrograms{All: true},
+		},
+	})
+	assert.NilError(t, err)
+	assert.Assert(t, len(response.Projects) > 0)
+	s.snapshot = response.Snapshot
+	s.projectID = response.Projects[0].Id
+	return s
+}
+
+// commit writes text where the compiler reads it and builds the snapshot that picks it up.
+func (s *parseSession) commit(t *testing.T, fileName string, text string) {
+	t.Helper()
+	assert.NilError(t, s.utils.FS().WriteFile(fileName, text))
+	response, err := s.session.handleUpdateSnapshot(context.Background(), &UpdateSnapshotParams{
+		Snapshot: s.snapshot,
+		Changes: &CreateSnapshotParams{
+			FileNotifications: &FileNotifications{Changed: []DocumentIdentifier{{FileName: fileName}}},
+			SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+				EnsurePrograms: &EnsurePrograms{All: true},
+			},
+		},
+	})
+	assert.NilError(t, err)
+	s.snapshot = response.Snapshot
+}
+
+func (s *parseSession) program() *compiler.Program {
+	return s.project.Snapshot().ProjectCollection.ConfiguredProject(tspath.Path(parseSessionConfigFileName)).GetProgram()
+}
+
+func (s *parseSession) close() {
+	s.session.Close()
+	s.project.Close()
+}
+
+func decodeSourceFileResponse(t *testing.T, response any) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(response.(*SourceFileResponse).Data)
+	assert.NilError(t, err)
+	return data
 }

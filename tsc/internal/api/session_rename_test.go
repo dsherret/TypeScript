@@ -99,12 +99,14 @@ func renameAt(t *testing.T, files map[string]any, position int, newName string, 
 	const fileName = "/home/projects/p/main.ts"
 	projectSession, _ := projecttestutil.Setup(files)
 	t.Cleanup(projectSession.Close)
-	session := NewSession(projectSession, nil)
+	session := NewLSPSession(projectSession, nil)
 	t.Cleanup(session.Close)
 
 	ctx := context.Background()
-	snapshotResp, err := session.handleUpdateSnapshot(ctx, &UpdateSnapshotParams{
-		OpenFiles: []DocumentIdentifier{{FileName: fileName}},
+	snapshotResp, err := session.handleCreateSnapshot(ctx, &CreateSnapshotParams{
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenFiles: []DocumentIdentifier{{FileName: fileName}},
+		},
 	})
 	assert.NilError(t, err)
 

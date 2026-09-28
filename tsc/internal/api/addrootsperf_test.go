@@ -55,10 +55,13 @@ func perfSetup(t *testing.T) (*perfHarness, func()) {
 		DefaultLibraryPath: bundled.LibPath(),
 		PositionEncoding:   lsproto.PositionEncodingKindUTF8,
 	})
-	session := NewSession(projectSession, nil)
+	session := NewLSPSession(projectSession, nil)
 	h := &perfHarness{session: session, utils: utils, ctx: context.Background()}
-	_, err := session.handleUpdateSnapshot(h.ctx, &UpdateSnapshotParams{
-		OpenProjects: []DocumentIdentifier{{FileName: perfConfigFileName}},
+	_, err := session.handleCreateSnapshot(h.ctx, &CreateSnapshotParams{
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenProjects:   []DocumentIdentifier{{FileName: perfConfigFileName}},
+			EnsurePrograms: &EnsurePrograms{All: true},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,10 +80,13 @@ func (h *perfHarness) writeConfig() {
 	h.utils.FS().WriteFile(perfConfigFileName, string(text))
 }
 
-func (h *perfHarness) update(t *testing.T, changes *APIFileChanges) {
-	_, err := h.session.handleUpdateSnapshot(h.ctx, &UpdateSnapshotParams{
-		FileChanges:  changes,
-		OpenProjects: []DocumentIdentifier{{FileName: perfConfigFileName}},
+func (h *perfHarness) update(t *testing.T, changes *FileNotifications) {
+	_, err := h.session.handleCreateSnapshot(h.ctx, &CreateSnapshotParams{
+		FileNotifications: changes,
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenProjects:   []DocumentIdentifier{{FileName: perfConfigFileName}},
+			EnsurePrograms: &EnsurePrograms{All: true},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +107,7 @@ func TestPerfInterleavedCreateAndManipulate(t *testing.T) {
 		h.utils.FS().WriteFile(name, fmt.Sprintf("export const v%d = %d;", i, i))
 		h.names = append(h.names, name)
 		h.writeConfig()
-		changes := &APIFileChanges{
+		changes := &FileNotifications{
 			Created: []DocumentIdentifier{{FileName: name}},
 			Changed: []DocumentIdentifier{{FileName: perfConfigFileName}},
 		}
@@ -131,7 +137,7 @@ func TestPerfCreateThenManipulate(t *testing.T) {
 		created = append(created, DocumentIdentifier{FileName: name})
 	}
 	h.writeConfig()
-	h.update(t, &APIFileChanges{
+	h.update(t, &FileNotifications{
 		Created: created,
 		Changed: []DocumentIdentifier{{FileName: perfConfigFileName}},
 	})
@@ -140,7 +146,7 @@ func TestPerfCreateThenManipulate(t *testing.T) {
 	for i := range n {
 		name := fmt.Sprintf("/perf/b%d.ts", i)
 		h.utils.FS().WriteFile(name, fmt.Sprintf("export const v%d = %d;\n\nclass C%d {\n}\n", i, i, i))
-		h.update(t, &APIFileChanges{Changed: []DocumentIdentifier{{FileName: name}}})
+		h.update(t, &FileNotifications{Changed: []DocumentIdentifier{{FileName: name}}})
 	}
 	elapsed := time.Since(start)
 	fmt.Printf("twoloop n=%d total=%v per-file=%v\n", n, elapsed, elapsed/time.Duration(n))

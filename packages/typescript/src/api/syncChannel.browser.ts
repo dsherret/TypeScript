@@ -35,6 +35,10 @@ export class SyncRpcChannel implements RpcChannel {
         throw new Error("SyncRpcChannel is unavailable in the browser.");
     }
 
+    unregisterCallback(_name: string): void {
+        throw new Error("SyncRpcChannel is unavailable in the browser.");
+    }
+
     close(): void {
         // nothing was ever opened
     }

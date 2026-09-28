@@ -3,7 +3,7 @@ import {
     describe,
     test,
 } from "node:test";
-import type { SnapshotChanges } from "../src/api/proto.ts";
+import type { ProjectId, SnapshotChanges } from "../src/api/proto.ts";
 import { SourceFileCache } from "../src/api/sourceFileCache.ts";
 import type {
     Path,
@@ -30,7 +30,7 @@ class Model {
         const previous = this.scopes.get(previousSnapshotId);
         if (previous === undefined) return;
         for (const [projectId, scope] of previous) {
-            if (removed.has(projectId)) continue;
+            if (removed.has(projectId as ProjectId)) continue;
             const projectChanges = changes?.changedProjects?.[projectId];
             const invalid = new Set([...projectChanges?.changedFiles ?? [], ...projectChanges?.deletedFiles ?? []]);
             const target = this.scopeFor(newSnapshotId, projectId);
@@ -82,6 +82,8 @@ class Harness {
     paths = new Set<string>();
     snapshots = new Set<number>();
     projects = new Set<string>();
+    leases = new Set<number>();
+    private nextLease = 1;
 
     set(path: string, snapshotId: number, projectId: string, version: string): void {
         this.paths.add(path);
@@ -89,6 +91,22 @@ class Harness {
         this.projects.add(projectId);
         this.cache.set(path as Path, fileFor(path, version), "opts", version, snapshotId, projectId);
         this.model.set(path, snapshotId, projectId, version);
+    }
+
+    /**
+     * Caches a file under a lease rather than a (snapshot, project) pair, which is how a
+     * tree the client already holds gets into the cache before any program claims it.
+     */
+    lease(path: string, version: string): SourceFile {
+        this.paths.add(path);
+        const leaseId = this.nextLease++;
+        this.leases.add(leaseId);
+        return this.cache.setForLease(path as Path, fileFor(path, version), "opts", version, leaseId);
+    }
+
+    releaseLeases(): void {
+        for (const leaseId of this.leases) this.cache.releaseLease(leaseId);
+        this.leases.clear();
     }
 
     retainForSnapshot(newSnapshotId: number, previousSnapshotId: number, changes?: SnapshotChanges): void {
@@ -123,27 +141,34 @@ class Harness {
      */
     checkAccounting(where: string): void {
         const internals = this.cache as unknown as {
-            cache: Map<string, { refCount: number; }[]>;
-            scopes: Map<number, Map<string, Map<string, { refCount: number; }>>>;
+            cache: Map<string, { refs: Set<string>; }[]>;
+            snapshotProjectPaths: Map<number, Map<string, Set<string>>>;
         };
-        const counted = new Map<object, number>();
-        for (const projects of internals.scopes.values()) {
-            for (const scope of projects.values()) {
-                for (const [path, entry] of scope) {
-                    assert.ok(internals.cache.get(path)?.includes(entry), `${where}: ${path} was evicted while a scope still pointed at it`);
-                    counted.set(entry, (counted.get(entry) ?? 0) + 1);
+        // every (snapshot, project) the cache is tracking a path for must still hold an
+        // entry for it, referenced under that pair's own key
+        for (const [snapshotId, projects] of internals.snapshotProjectPaths) {
+            for (const [projectId, paths] of projects) {
+                for (const path of paths) {
+                    const key = `snapshot:${snapshotId}:${projectId}`;
+                    const entries = internals.cache.get(path);
+                    assert.ok(
+                        entries?.some(entry => entry.refs.has(key)),
+                        `${where}: ${path} was evicted while snapshot ${snapshotId} of ${projectId} still pointed at it`,
+                    );
                 }
             }
         }
+        // and nothing is left in the cache that nothing references
         for (const [path, entries] of internals.cache) {
             for (const entry of entries) {
-                assert.strictEqual(entry.refCount, counted.get(entry) ?? 0, `${where}: ${path} is counted wrong`);
+                assert.ok(entry.refs.size > 0, `${where}: ${path} is cached with no references`);
             }
         }
     }
 
     /** Releases everything and checks that nothing is left behind. */
     checkNothingLeaks(): void {
+        this.releaseLeases();
         for (const snapshotId of this.snapshots) this.releaseSnapshot(snapshotId);
         assert.strictEqual(this.cache.size, 0, "entries left after every snapshot was released");
     }
@@ -209,7 +234,7 @@ describe("SourceFileCache", () => {
         const h = new Harness();
         h.set("/a.ts", 1, "p", "a1");
         h.set("/x.ts", 1, "q", "x1");
-        h.retainForSnapshot(2, 1, { removedProjects: ["q"] });
+        h.retainForSnapshot(2, 1, { removedProjects: ["q" as ProjectId] });
         h.check("before the release");
         h.releaseSnapshot(1);
         h.check("after the release");
@@ -312,60 +337,6 @@ describe("SourceFileCache", () => {
      * things to check here are that a matching fetch gets that object back, that a
      * mismatching one does not, and that offering repeatedly does not accumulate.
      */
-    describe("offer", () => {
-        test("a fetch that matches gets the offered object back", () => {
-            const h = new Harness();
-            const offered = fileFor("/a.ts", "v1");
-            h.cache.offer("/a.ts" as Path, offered, "opts", "v1");
-            assert.strictEqual(h.cache.set("/a.ts" as Path, fileFor("/a.ts", "v1"), "opts", "v1", 1, "p"), offered);
-            h.snapshots.add(1);
-            h.projects.add("p");
-            h.paths.add("/a.ts");
-            h.model.set("/a.ts", 1, "p", "v1");
-            h.check("after a matching fetch");
-        });
-
-        test("a fetch of different text ignores the offer", () => {
-            const h = new Harness();
-            const offered = fileFor("/a.ts", "v1");
-            h.cache.offer("/a.ts" as Path, offered, "opts", "v1");
-            const fetched = fileFor("/a.ts", "v2");
-            assert.strictEqual(h.cache.set("/a.ts" as Path, fetched, "opts", "v2", 1, "p"), fetched);
-        });
-
-        test("a fetch with different parse options ignores the offer", () => {
-            const h = new Harness();
-            h.cache.offer("/a.ts" as Path, fileFor("/a.ts", "v1"), "opts", "v1");
-            const fetched = fileFor("/a.ts", "v1");
-            assert.strictEqual(h.cache.set("/a.ts" as Path, fetched, "other", "v1", 1, "p"), fetched);
-        });
-
-        test("only one un-retained offer is kept per path", () => {
-            const h = new Harness();
-            const internals = h.cache as unknown as { cache: Map<string, unknown[]>; };
-            for (let i = 0; i < 50; i++) h.cache.offer("/a.ts" as Path, fileFor("/a.ts", `v${i}`), "opts", `v${i}`);
-            assert.strictEqual(internals.cache.get("/a.ts")!.length, 1, "an editing loop must not accumulate a version per edit");
-        });
-
-        test("an offer does not displace an entry a snapshot is reading", () => {
-            const h = new Harness();
-            h.set("/a.ts", 1, "p", "v1");
-            h.cache.offer("/a.ts" as Path, fileFor("/a.ts", "v2"), "opts", "v2");
-            h.check("after offering beside a retained entry");
-            h.cache.offer("/a.ts" as Path, fileFor("/a.ts", "v3"), "opts", "v3");
-            h.check("after replacing the offer");
-            h.releaseSnapshot(1);
-            h.check("after releasing the snapshot");
-        });
-
-        test("offering what is already retained changes nothing", () => {
-            const h = new Harness();
-            h.set("/a.ts", 1, "p", "v1");
-            h.cache.offer("/a.ts" as Path, fileFor("/a.ts", "v1"), "opts", "v1");
-            h.check("after offering a duplicate");
-        });
-    });
-
     /**
      * retainMatching is set without a tree to fall back on, for a client that asked the
      * server for the hash and the parse options key alone rather than for the file. So
@@ -376,8 +347,7 @@ describe("SourceFileCache", () => {
     describe("retainMatching", () => {
         test("answers with what a fetch of the same file would have", () => {
             const h = new Harness();
-            const offered = fileFor("/a.ts", "v1");
-            h.cache.offer("/a.ts" as Path, offered, "opts", "v1");
+            const offered = h.lease("/a.ts", "v1");
             assert.strictEqual(h.cache.retainMatching("/a.ts" as Path, "opts", "v1", 1, "p"), offered);
             h.snapshots.add(1);
             h.projects.add("p");
@@ -388,13 +358,13 @@ describe("SourceFileCache", () => {
 
         test("does not answer for different text", () => {
             const h = new Harness();
-            h.cache.offer("/a.ts" as Path, fileFor("/a.ts", "v1"), "opts", "v1");
+            h.lease("/a.ts", "v1");
             assert.strictEqual(h.cache.retainMatching("/a.ts" as Path, "opts", "v2", 1, "p"), undefined);
         });
 
         test("does not answer for different parse options", () => {
             const h = new Harness();
-            h.cache.offer("/a.ts" as Path, fileFor("/a.ts", "v1"), "opts", "v1");
+            h.lease("/a.ts", "v1");
             assert.strictEqual(h.cache.retainMatching("/a.ts" as Path, "other", "v1", 1, "p"), undefined);
         });
 
@@ -421,7 +391,7 @@ describe("SourceFileCache", () => {
         test("displaces what the pair was reading, exactly as set does", () => {
             const h = new Harness();
             h.set("/a.ts", 1, "p", "v1");
-            h.cache.offer("/a.ts" as Path, fileFor("/a.ts", "v2"), "opts", "v2");
+            h.lease("/a.ts", "v2");
             assert.strictEqual(
                 (h.cache.retainMatching("/a.ts" as Path, "opts", "v2", 1, "p") as unknown as { version: string; }).version,
                 "v2",

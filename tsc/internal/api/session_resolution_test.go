@@ -127,7 +127,7 @@ func TestResolveModuleNameHookReceivesResolutionMode(t *testing.T) {
 
 	projectSession, _ := projecttestutil.SetupWithOptions(files, options)
 	defer projectSession.Close()
-	session := NewSession(projectSession, nil)
+	session := NewLSPSession(projectSession, nil)
 	defer session.Close()
 
 	for _, fileName := range []string{"/home/projects/p/esm.mts", "/home/projects/p/cjs.cts"} {
@@ -164,7 +164,7 @@ func semanticDiagnosticCodesWithHook(
 
 	projectSession, _ := projecttestutil.SetupWithOptions(files, options)
 	defer projectSession.Close()
-	session := NewSession(projectSession, nil)
+	session := NewLSPSession(projectSession, nil)
 	defer session.Close()
 
 	return requestSemanticDiagnostics(t, session, mainFileName)
@@ -174,8 +174,10 @@ func requestSemanticDiagnostics(t *testing.T, session *Session, fileName string)
 	t.Helper()
 	ctx := context.Background()
 
-	snapshotResp, err := session.handleUpdateSnapshot(ctx, &UpdateSnapshotParams{
-		OpenFiles: []DocumentIdentifier{{FileName: fileName}},
+	snapshotResp, err := session.handleCreateSnapshot(ctx, &CreateSnapshotParams{
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenFiles: []DocumentIdentifier{{FileName: fileName}},
+		},
 	})
 	assert.NilError(t, err)
 

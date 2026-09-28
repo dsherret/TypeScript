@@ -82,7 +82,7 @@ func TestAPIRootsAreKeptWhenTheConfigIsRewritten(t *testing.T) {
 		"files":           []string{},
 	})
 	s.write(addRootsConfigFileName, string(text))
-	s.update(t, &APIFileChanges{Changed: identifiers(addRootsConfigFileName)})
+	s.update(t, &FileNotifications{Changed: identifiers(addRootsConfigFileName)})
 
 	assert.DeepEqual(t, projectFileNames(t, s), []string{"/p/a.ts", "/p/b.ts"})
 	assert.Assert(t, s.program(t).Options().Strict.IsTrue())
@@ -192,7 +192,7 @@ func TestAPIRootsAreReportedByGetProjectRootFiles(t *testing.T) {
 	})
 	defer s.close()
 
-	proj := s.project.Snapshot().ProjectCollection.ConfiguredProject(addRootsConfigFileName)
+	proj := s.collection().ConfiguredProject(addRootsConfigFileName)
 	assert.Assert(t, proj != nil)
 	assert.DeepEqual(t, proj.RootFileNames(), []string{"/p/a.ts", "/p/b.ts"})
 }
@@ -227,7 +227,7 @@ func TestAPIRootsRollingCreateAndDelete(t *testing.T) {
 		s.pendingRoots = []string{added}
 		s.removedRoots = []string{dropped}
 		s.roots = slices.Concat(s.roots[1:], []string{added})
-		s.update(t, &APIFileChanges{
+		s.update(t, &FileNotifications{
 			Created: identifiers(added),
 			Deleted: identifiers(dropped),
 		})
@@ -287,7 +287,7 @@ func newAPIRootsSessionWithConfig(t *testing.T, files map[string]string, configT
 		DefaultLibraryPath: bundled.LibPath(),
 		PositionEncoding:   lsproto.PositionEncodingKindUTF8,
 	})
-	s.session = NewSession(s.project, nil)
+	s.session = NewLSPSession(s.project, nil)
 	s.update(t, nil)
 	return s
 }

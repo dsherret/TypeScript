@@ -18,8 +18,8 @@ const files = {
 
 const api = createWasmAPI({ wasm, cwd: "/", fs: createVirtualFileSystem(files) });
 
-const snapshot = api.updateSnapshot({ openProject: "/tsconfig.json" });
-const project = snapshot.getProject("/tsconfig.json");
+const snapshot = api.createSnapshot({ openProject: "/tsconfig.json" });
+const project = snapshot.getConfiguredProject("/tsconfig.json");
 assert.ok(project, "expected a project for /tsconfig.json");
 
 const program = project.program;

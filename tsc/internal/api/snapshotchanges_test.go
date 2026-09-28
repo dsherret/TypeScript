@@ -178,46 +178,6 @@ func TestSnapshotChangesMatchTheFileMapDiff(t *testing.T) {
 	}
 }
 
-// TestTemporarySnapshotChangesMatchTheFileMapDiff checks the same thing for the
-// temporary snapshot path, which diffs against a base the caller names rather than
-// against the snapshot before it.
-func TestTemporarySnapshotChangesMatchTheFileMapDiff(t *testing.T) {
-	t.Parallel()
-	if !bundled.Embedded {
-		t.Skip("bundled files are not embedded")
-	}
-
-	s := newSnapshotChangesSession(t, map[string]string{
-		"/p/a.ts": "export const a = 1;",
-		"/p/b.ts": "export const b = 2;",
-	})
-	defer s.close()
-
-	base := s.latest()
-	response, err := s.session.handleUpdateTemporarySnapshot(context.Background(), &UpdateTemporarySnapshotParams{
-		Snapshot: snapshotHandle(base),
-		File:     DocumentIdentifier{FileName: "/p/a.ts"},
-		NewText:  "export const a = 111;",
-	})
-	assert.NilError(t, err)
-	next := s.session.snapshots[response.Snapshot].snapshot
-	assertSameChanges(t, "changed text", response.Changes, referenceSnapshotChanges(base, next))
-	assert.Assert(t, len(response.Changes.ChangedProjects) == 1)
-	assert.Assert(t, s.tookFastPath(base, next))
-
-	// overriding a file with the text it already has changes nothing, so nothing may
-	// be reported changed
-	response, err = s.session.handleUpdateTemporarySnapshot(context.Background(), &UpdateTemporarySnapshotParams{
-		Snapshot: snapshotHandle(base),
-		File:     DocumentIdentifier{FileName: "/p/a.ts"},
-		NewText:  "export const a = 1;",
-	})
-	assert.NilError(t, err)
-	next = s.session.snapshots[response.Snapshot].snapshot
-	assertSameChanges(t, "unchanged text", response.Changes, referenceSnapshotChanges(base, next))
-	assert.Equal(t, len(response.Changes.ChangedProjects), 0)
-}
-
 type snapshotChangeStep struct {
 	// write and remove change the file system before the update is asked for.
 	write  map[string]string
@@ -242,12 +202,13 @@ type snapshotChangeStep struct {
 const snapshotChangesConfigFileName = "/p/tsconfig.json"
 
 type snapshotChangesSession struct {
-	session *Session
-	project *project.Session
-	utils   *projecttestutil.SessionUtils
-	roots   []string
-	options map[string]any
-	opened  []string
+	session  *Session
+	project  *project.Session
+	utils    *projecttestutil.SessionUtils
+	roots    []string
+	options  map[string]any
+	opened   []string
+	latestID SnapshotID
 }
 
 func newSnapshotChangesSession(t *testing.T, files map[string]string) *snapshotChangesSession {
@@ -270,11 +231,15 @@ func newSnapshotChangesSession(t *testing.T, files map[string]string) *snapshotC
 		DefaultLibraryPath: bundled.LibPath(),
 		PositionEncoding:   lsproto.PositionEncodingKindUTF8,
 	})
-	s.session = NewSession(s.project, nil)
-	_, err := s.session.handleUpdateSnapshot(context.Background(), &UpdateSnapshotParams{
-		OpenProjects: identifiers(s.opened...),
+	s.session = NewLSPSession(s.project, nil)
+	initialResponse, err := s.session.handleCreateSnapshot(context.Background(), &CreateSnapshotParams{
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenProjects:   identifiers(s.opened...),
+			EnsurePrograms: &EnsurePrograms{All: true},
+		},
 	})
 	assert.NilError(t, err)
+	s.latestID = initialResponse.Snapshot
 	return s
 }
 
@@ -289,7 +254,7 @@ func (s *snapshotChangesSession) configText() string {
 }
 
 func (s *snapshotChangesSession) latest() *project.Snapshot {
-	return s.session.snapshots[s.session.latestSnapshot].snapshot
+	return s.session.snapshots[s.latestID].snapshot
 }
 
 // run applies a step and checks the changes it was reported against the ones a full
@@ -321,15 +286,24 @@ func (s *snapshotChangesSession) run(t *testing.T, index int, step snapshotChang
 	s.opened = slices.DeleteFunc(s.opened, func(name string) bool { return slices.Contains(step.closeProjects, name) })
 
 	prev := s.latest()
+	// derived rather than created: what is checked is the diff against the snapshot
+	// before, which an independent snapshot has none of
 	response, err := s.session.handleUpdateSnapshot(context.Background(), &UpdateSnapshotParams{
-		FileChanges: &APIFileChanges{
-			Created: identifiers(step.created...),
-			Changed: identifiers(changed...),
-			Deleted: identifiers(step.deleted...),
+		Snapshot: s.latestID,
+		Changes: &CreateSnapshotParams{
+			FileNotifications: &FileNotifications{
+				Created: identifiers(step.created...),
+				Changed: identifiers(changed...),
+				Deleted: identifiers(step.deleted...),
+			},
+			SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+				OpenProjects:   identifiers(s.opened...),
+				EnsurePrograms: &EnsurePrograms{All: true},
+			},
 		},
-		OpenProjects: identifiers(s.opened...),
 	})
 	assert.NilError(t, err)
+	s.latestID = response.Snapshot
 	next := s.session.snapshots[response.Snapshot].snapshot
 	where := fmt.Sprintf("step %d", index)
 	assertSameChanges(t, where, response.Changes, referenceSnapshotChanges(prev, next))
@@ -355,13 +329,13 @@ func (s *snapshotChangesSession) tookFastPath(prev *project.Snapshot, next *proj
 func referenceSnapshotChanges(prev *project.Snapshot, next *project.Snapshot) *SnapshotChanges {
 	var changes SnapshotChanges
 	collections.DiffOrderedMaps(
-		prev.ProjectCollection.ProjectsByPath(),
-		next.ProjectCollection.ProjectsByPath(),
-		func(_ tspath.Path, _ *project.Project) {},
-		func(_ tspath.Path, oldProj *project.Project) {
-			changes.RemovedProjects = append(changes.RemovedProjects, ProjectHandle(oldProj))
+		projectsByID(prev),
+		projectsByID(next),
+		func(_ project.ID, _ *project.Project) {},
+		func(_ project.ID, oldProj *project.Project) {
+			changes.RemovedProjects = append(changes.RemovedProjects, oldProj.ID())
 		},
-		func(_ tspath.Path, oldProj *project.Project, newProj *project.Project) {
+		func(_ project.ID, oldProj *project.Project, newProj *project.Project) {
 			if oldProj.GetProgram() == newProj.GetProgram() {
 				return
 			}
@@ -385,9 +359,9 @@ func referenceSnapshotChanges(prev *project.Snapshot, next *project.Snapshot) *S
 			)
 			if len(projectChanges.ChangedFiles) > 0 || len(projectChanges.DeletedFiles) > 0 {
 				if changes.ChangedProjects == nil {
-					changes.ChangedProjects = make(map[ProjectID]*ProjectFileChanges)
+					changes.ChangedProjects = make(map[project.ID]*ProjectFileChanges)
 				}
-				changes.ChangedProjects[ProjectHandle(newProj)] = &projectChanges
+				changes.ChangedProjects[newProj.ID()] = &projectChanges
 			}
 		},
 	)
@@ -416,7 +390,7 @@ func formatSnapshotChanges(changes *SnapshotChanges) string {
 	}
 	slices.Sort(ids)
 	for _, id := range ids {
-		projectChanges := changes.ChangedProjects[ProjectID(id)]
+		projectChanges := changes.ChangedProjects[project.ID(id)]
 		fmt.Fprintf(&b, "%s\n  changed: %s\n  deleted: %s\n", id, joinPaths(projectChanges.ChangedFiles), joinPaths(projectChanges.DeletedFiles))
 	}
 	return b.String()
@@ -429,4 +403,14 @@ func joinPaths(paths []tspath.Path) string {
 	}
 	slices.Sort(names)
 	return strings.Join(names, ", ")
+}
+
+// projectsByID keys a snapshot's projects the way the response does, which is what the
+// two are diffed on.
+func projectsByID(snapshot *project.Snapshot) *collections.OrderedMap[project.ID, *project.Project] {
+	projects := &collections.OrderedMap[project.ID, *project.Project]{}
+	for _, proj := range snapshot.ProjectCollection.Projects() {
+		projects.Set(proj.ID(), proj)
+	}
+	return projects
 }

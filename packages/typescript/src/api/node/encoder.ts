@@ -28,6 +28,7 @@ import {
     NODE_LEN,
     PROTOCOL_VERSION,
 } from "./protocol.ts";
+import { encodeWtf8 } from "./wtf8.ts";
 
 const NODE_FIELDS = NODE_LEN / 4;
 const NODE_FIELD_NEXT = 3;
@@ -35,7 +36,7 @@ const NO_STRUCTURED_DATA = 0xFFFFFFFF;
 
 // String table that accumulates strings into a flat byte pool.
 class StringTable {
-    private parts: string[];
+    private parts: Uint8Array[];
     private byteLen: number;
     private offsets: number[];
 
@@ -47,26 +48,27 @@ class StringTable {
 
     add(text: string): number {
         const index = this.offsets.length;
-        const encoder = cachedEncoder();
-        const encodedLength = encoder.encode(text).length;
+        const encoded = encodeWtf8(text);
         const offset = this.byteLen;
-        this.parts.push(text);
-        this.byteLen += encodedLength;
-        this.offsets.push(offset, offset + encodedLength);
+        this.parts.push(encoded);
+        this.byteLen += encoded.length;
+        this.offsets.push(offset, offset + encoded.length);
         return index;
     }
 
     encode(): Uint8Array {
-        const encoder = cachedEncoder();
-        const dataBytes = encoder.encode(this.parts.join(""));
         const offsetBytes = new Uint8Array(this.offsets.length * 4);
         const view = new DataView(offsetBytes.buffer);
         for (let i = 0; i < this.offsets.length; i++) {
             view.setUint32(i * 4, this.offsets[i], true);
         }
-        const result = new Uint8Array(offsetBytes.length + dataBytes.length);
+        const result = new Uint8Array(offsetBytes.length + this.byteLen);
         result.set(offsetBytes, 0);
-        result.set(dataBytes, offsetBytes.length);
+        let offset = offsetBytes.length;
+        for (const part of this.parts) {
+            result.set(part, offset);
+            offset += part.length;
+        }
         return result;
     }
 
@@ -77,11 +79,6 @@ class StringTable {
     offsetsCount(): number {
         return this.offsets.length;
     }
-}
-
-let _encoder: TextEncoder | undefined;
-function cachedEncoder(): TextEncoder {
-    return _encoder ??= new TextEncoder();
 }
 
 function getChildrenPropertyMask(node: Node): number {
@@ -286,7 +283,7 @@ export function encodeNode(node: Node, nodeIndices?: Map<Node, number>): Uint8Ar
             0, // next
             parentIndex,
             list.length, // data for NodeList is its length
-            0, // flags
+            list.hasTrailingComma ? 1 : 0, // NodeLists have no AST flags; this slot is reused for hasTrailingComma
         );
 
         const saveParentIndex = parentIndex;
@@ -394,6 +391,24 @@ export function encodeNode(node: Node, nodeIndices?: Map<Node, number>): Uint8Ar
 /**
  * Encode a Uint8Array to a base64 string.
  */
+//
+// btoa/atob rather than node:buffer, because this file is reached from the browser
+// build too. They are latin-1 in and out, which is exactly a byte per character.
 export function uint8ArrayToBase64(data: Uint8Array): string {
-    return Buffer.from(data).toString("base64");
+    let latin1 = "";
+    // in chunks, because spreading a whole source file into fromCharCode overflows the stack
+    for (let i = 0; i < data.length; i += 0x8000) {
+        latin1 += String.fromCharCode(...data.subarray(i, i + 0x8000));
+    }
+    return btoa(latin1);
+}
+
+export function sourceFileResponseToUint8Array(response: { readonly data: string; } | null | undefined): Uint8Array | undefined {
+    if (!response) return undefined;
+    const latin1 = atob(response.data);
+    const bytes = new Uint8Array(latin1.length);
+    for (let i = 0; i < latin1.length; i++) {
+        bytes[i] = latin1.charCodeAt(i);
+    }
+    return bytes;
 }

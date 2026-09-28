@@ -310,7 +310,7 @@ func addRootsUpdate(t *testing.T, session *Session, changes FileChangeSummary) {
 	openProjects.Add(addRootsConfigFile)
 	snapshot, err := session.APIUpdate(context.Background(), changes, &APISnapshotRequest{OpenProjects: openProjects})
 	assert.NilError(t, err)
-	snapshot.Deref(session)
+	snapshot.Deref()
 }
 
 func addRootsConfigJSON(roots []string) string {
@@ -422,7 +422,7 @@ func addRootsClose(t *testing.T, session *Session) {
 	closeProjects.Add(tspath.Path(addRootsConfigFile))
 	snapshot, err := session.APIUpdate(context.Background(), FileChangeSummary{}, &APISnapshotRequest{CloseProjects: closeProjects})
 	assert.NilError(t, err)
-	snapshot.Deref(session)
+	snapshot.Deref()
 	session.WaitForBackgroundTasks()
 	session.Close()
 }

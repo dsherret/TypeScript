@@ -1268,6 +1268,7 @@ export interface ModuleDeclaration extends StatementBase, DeclarationBase, Modif
     readonly kind: SyntaxKind.ModuleDeclaration;
     readonly keyword: SyntaxKind.ModuleKeyword | SyntaxKind.NamespaceKeyword;
     readonly name: ModuleName;
+    readonly attributes?: TypeLiteralNode;
     readonly body?: ModuleBody;
 }
 export interface ImportEqualsDeclaration extends StatementBase, DeclarationBase, ModifiersBase {
@@ -1342,7 +1343,7 @@ export type HeritageClauseElement = ExpressionWithTypeArguments | TypeReferenceN
 export type BlockOrExpression = Block | Expression;
 export type NodeBody = Block | Expression | ModuleBlock | ModuleDeclaration;
 export type AccessExpression = PropertyAccessExpression | ElementAccessExpression;
-export type DeclarationName = Identifier | PrivateIdentifier | StringLiteral | NumericLiteral | BigIntLiteral | NoSubstitutionTemplateLiteral | ComputedPropertyName | BindingPattern | ElementAccessExpression;
+export type DeclarationName = Identifier | PrivateIdentifier | StringLiteral | NumericLiteral | BigIntLiteral | NoSubstitutionTemplateLiteral | ComputedPropertyName | BindingPattern | PropertyAccessExpression | ElementAccessExpression;
 export type ModuleName = Identifier | StringLiteral;
 export type ModuleExportName = Identifier | StringLiteral;
 export type PropertyName = Identifier | StringLiteral | NoSubstitutionTemplateLiteral | NumericLiteral | ComputedPropertyName | PrivateIdentifier | BigIntLiteral;

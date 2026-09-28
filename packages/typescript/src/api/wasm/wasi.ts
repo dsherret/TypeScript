@@ -64,7 +64,7 @@ export function createWasiImports(options: WasiShimOptions): WasiImports {
     const streams = {
         [stdoutFd]: { decoder: new TextDecoder("utf-8"), pending: "", emit: (text: string) => onStdout(text) },
         [stderrFd]: { decoder: new TextDecoder("utf-8"), pending: "", emit: (text: string) => onStderr(text) },
-    } as Record<number, { decoder: TextDecoder; pending: string; emit: (text: string) => void; }>;
+    } as Record<number, { decoder: InstanceType<typeof TextDecoder>; pending: string; emit: (text: string) => void; }>;
 
     /** Emits whole lines, holding the remainder until the writer completes it. */
     function writeToStream(fd: number, chunk: Uint8Array, final: boolean): void {
@@ -238,6 +238,7 @@ export function createWasiImports(options: WasiShimOptions): WasiImports {
         fd_prestat_dir_name: () => unsupported("fd_prestat_dir_name", errnoBadf),
         path_open: () => unsupported("path_open"),
         path_filestat_get: () => unsupported("path_filestat_get"),
+        path_readlink: () => unsupported("path_readlink"),
         path_create_directory: () => unsupported("path_create_directory"),
         path_remove_directory: () => unsupported("path_remove_directory"),
         path_unlink_file: () => unsupported("path_unlink_file"),

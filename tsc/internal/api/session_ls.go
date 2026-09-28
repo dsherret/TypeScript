@@ -65,14 +65,14 @@ func (s *Session) handleOrganizeImports(ctx context.Context, params *OrganizeImp
 	}
 	defer setup.done()
 
-	kind := lsproto.CodeActionKindSourceOrganizeImports
+	kind := lsproto.CodeActionKindSourceOrganizeImportsTs
 	switch params.Mode {
 	case "", OrganizeImportsModeAll:
-		kind = lsproto.CodeActionKindSourceOrganizeImports
+		kind = lsproto.CodeActionKindSourceOrganizeImportsTs
 	case OrganizeImportsModeSortAndCombine:
-		kind = lsproto.CodeActionKindSourceSortImports
+		kind = lsproto.CodeActionKindSourceSortImportsTs
 	case OrganizeImportsModeRemoveUnused:
-		kind = lsproto.CodeActionKindSourceRemoveUnusedImports
+		kind = lsproto.CodeActionKindSourceRemoveUnusedImportsTs
 	default:
 		return nil, fmt.Errorf("%w: unknown organize imports mode %q", ErrClientError, params.Mode)
 	}
@@ -372,12 +372,12 @@ type languageServiceSetup struct {
 // Fixes that add imports need the snapshot's auto-import registry prepared for
 // the file; autoImports requests that, at the cost of building the registry.
 // Callers must call done() to release the prepared snapshot.
-func (s *Session) setupLanguageServiceForFile(ctx context.Context, snapshot SnapshotID, project ProjectID, file DocumentIdentifier, autoImports bool) (*languageServiceSetup, error) {
+func (s *Session) setupLanguageServiceForFile(ctx context.Context, snapshot SnapshotID, projectID project.ID, file DocumentIdentifier, autoImports bool) (*languageServiceSetup, error) {
 	sd, err := s.getSnapshotData(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	program, err := sd.getProgram(project)
+	program, err := sd.getProgram(projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -388,21 +388,20 @@ func (s *Session) setupLanguageServiceForFile(ctx context.Context, snapshot Snap
 	}
 
 	documentURI := file.ToURI(s.projectSession.GetCurrentDirectory())
-	projectPath := parseProjectHandle(project)
 	workingSnapshot := sd.snapshot
 	done := func() {}
 
 	if autoImports {
 		if registry := workingSnapshot.AutoImportRegistry(); registry == nil ||
-			!registry.IsPreparedForImportingFile(sourceFile.FileName(), projectPath, workingSnapshot.UserPreferences()) {
-			prepared := s.projectSession.GetSnapshotWithAutoImports(ctx, workingSnapshot, documentURI)
-			done = func() { prepared.Deref(s.projectSession) }
+			!registry.IsPreparedForImportingFile(sourceFile.FileName(), projectID, workingSnapshot.UserPreferences()) {
+			prepared := s.projectSession.CloneSnapshotWithAutoImports(ctx, workingSnapshot, documentURI, nil)
+			done = func() { prepared.Deref() }
 			workingSnapshot = prepared
 
-			proj := workingSnapshot.ProjectCollection.GetProjectByPath(projectPath)
+			proj := workingSnapshot.ProjectCollection.GetProject(projectID)
 			if proj == nil {
 				done()
-				return nil, fmt.Errorf("%w: project %s not found", ErrClientError, projectPath)
+				return nil, fmt.Errorf("%w: project %s not found", ErrClientError, projectID)
 			}
 			program = proj.GetProgram()
 			if program == nil {
@@ -417,10 +416,10 @@ func (s *Session) setupLanguageServiceForFile(ctx context.Context, snapshot Snap
 		}
 	}
 
-	proj := workingSnapshot.ProjectCollection.GetProjectByPath(projectPath)
+	proj := workingSnapshot.ProjectCollection.GetProject(projectID)
 	if proj == nil {
 		done()
-		return nil, fmt.Errorf("%w: project %s not found", ErrClientError, projectPath)
+		return nil, fmt.Errorf("%w: project %s not found", ErrClientError, projectID)
 	}
 
 	return &languageServiceSetup{
@@ -541,7 +540,7 @@ func toLSPFormattingOptions(options *FormattingOptions) *lsproto.FormattingOptio
 // posFromLSP converts an LSP position to a UTF-8 offset for a file the api serves
 // directly, where the content mapping is identity.
 func posFromLSP(c *lsconv.Converters, file *ast.SourceFile, pos lsproto.Position) core.TextPos {
-	mapped := lsconv.FromLSPPositionForSourceFile(c, file, pos, spanmap.FeatureNone)
+	mapped := c.FromLSPPositionForSourceFile(file, pos, spanmap.FeatureNone)
 	if len(mapped) == 0 {
 		return 0
 	}

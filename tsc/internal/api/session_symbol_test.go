@@ -7,6 +7,7 @@ import (
 
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
 	"github.com/microsoft/TypeScript/tsc/internal/bundled"
+	"github.com/microsoft/TypeScript/tsc/internal/project"
 	"github.com/microsoft/TypeScript/tsc/internal/testutil/projecttestutil"
 	"gotest.tools/v3/assert"
 )
@@ -126,7 +127,7 @@ const (
 
 // symbolOfFirstNodeOfKind is what getSymbolOfDeclaration answers for the first
 // node of `kind` in main.ts, in source order.
-func symbolOfFirstNodeOfKind(t *testing.T, session *Session, snapshot SnapshotID, projectID ProjectID, kind ast.Kind) *SymbolResponse {
+func symbolOfFirstNodeOfKind(t *testing.T, session *Session, snapshot SnapshotID, projectID project.ID, kind ast.Kind) *SymbolResponse {
 	t.Helper()
 	symbol, err := session.handleGetSymbolOfDeclaration(context.Background(), &GetSymbolOfDeclarationParams{
 		Snapshot:    snapshot,
@@ -139,7 +140,7 @@ func symbolOfFirstNodeOfKind(t *testing.T, session *Session, snapshot SnapshotID
 
 // symbolAtStartOfFile is the symbol at offset zero of a file, which for a module
 // is the file's own module symbol.
-func symbolAtStartOfFile(t *testing.T, session *Session, snapshot SnapshotID, projectID ProjectID, fileName string) *SymbolResponse {
+func symbolAtStartOfFile(t *testing.T, session *Session, snapshot SnapshotID, projectID project.ID, fileName string) *SymbolResponse {
 	t.Helper()
 	symbol, err := session.handleGetSymbolAtLocation(context.Background(), &GetSymbolAtLocationParams{
 		Snapshot: snapshot,
@@ -150,7 +151,7 @@ func symbolAtStartOfFile(t *testing.T, session *Session, snapshot SnapshotID, pr
 	return symbol
 }
 
-func symbolToStringAtStartOfFile(t *testing.T, session *Session, snapshot SnapshotID, projectID ProjectID, symbol SymbolID, fileName string) string {
+func symbolToStringAtStartOfFile(t *testing.T, session *Session, snapshot SnapshotID, projectID project.ID, symbol SymbolID, fileName string) string {
 	t.Helper()
 	result, err := session.handleSymbolToString(context.Background(), &SymbolToStringParams{
 		Snapshot: snapshot,
@@ -170,7 +171,7 @@ func nodeHandleOfFirstNodeOfKind(
 	t *testing.T,
 	session *Session,
 	snapshot SnapshotID,
-	projectID ProjectID,
+	projectID project.ID,
 	fileName string,
 	kind ast.Kind,
 ) NodeHandle {
@@ -199,7 +200,7 @@ func findFirstNodeOfKind(node *ast.Node, kind ast.Kind) *ast.Node {
 	return found
 }
 
-func setupSymbolProject(t *testing.T) (*Session, SnapshotID, ProjectID) {
+func setupSymbolProject(t *testing.T) (*Session, SnapshotID, project.ID) {
 	t.Helper()
 	if !bundled.Embedded {
 		t.Skip("bundled files are not embedded")
@@ -214,12 +215,14 @@ func setupSymbolProject(t *testing.T) (*Session, SnapshotID, ProjectID) {
 
 	projectSession, _ := projecttestutil.Setup(files)
 	t.Cleanup(projectSession.Close)
-	session := NewSession(projectSession, nil)
+	session := NewLSPSession(projectSession, nil)
 	t.Cleanup(session.Close)
 
 	ctx := context.Background()
-	snapshotResp, err := session.handleUpdateSnapshot(ctx, &UpdateSnapshotParams{
-		OpenFiles: []DocumentIdentifier{{FileName: symbolMainPath}, {FileName: symbolRootPath}},
+	snapshotResp, err := session.handleCreateSnapshot(ctx, &CreateSnapshotParams{
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenFiles: []DocumentIdentifier{{FileName: symbolMainPath}, {FileName: symbolRootPath}},
+		},
 	})
 	assert.NilError(t, err)
 

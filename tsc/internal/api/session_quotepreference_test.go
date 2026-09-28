@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/TypeScript/tsc/internal/bundled"
+	"github.com/microsoft/TypeScript/tsc/internal/project"
 	"github.com/microsoft/TypeScript/tsc/internal/testutil/projecttestutil"
 	"gotest.tools/v3/assert"
 )
@@ -105,7 +106,7 @@ func firstEditText(t *testing.T, changes []*FileTextEdits) string {
 	return strings.TrimRight(changes[0].Edits[0].NewText, "\r\n")
 }
 
-func setupImportFixProject(t *testing.T) (*Session, SnapshotID, ProjectID, string) {
+func setupImportFixProject(t *testing.T) (*Session, SnapshotID, project.ID, string) {
 	t.Helper()
 	const fileName = "/home/projects/p/main.ts"
 	files := map[string]any{
@@ -116,12 +117,14 @@ func setupImportFixProject(t *testing.T) (*Session, SnapshotID, ProjectID, strin
 
 	projectSession, _ := projecttestutil.Setup(files)
 	t.Cleanup(projectSession.Close)
-	session := NewSession(projectSession, nil)
+	session := NewLSPSession(projectSession, nil)
 	t.Cleanup(session.Close)
 
 	ctx := context.Background()
-	snapshotResp, err := session.handleUpdateSnapshot(ctx, &UpdateSnapshotParams{
-		OpenFiles: []DocumentIdentifier{{FileName: fileName}},
+	snapshotResp, err := session.handleCreateSnapshot(ctx, &CreateSnapshotParams{
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenFiles: []DocumentIdentifier{{FileName: fileName}},
+		},
 	})
 	assert.NilError(t, err)
 

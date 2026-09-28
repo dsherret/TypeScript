@@ -19,6 +19,7 @@ export interface RpcChannel {
     requestSync(method: string, payload: string): string;
     requestBinarySync(method: string, payload: Uint8Array): Uint8Array;
     registerCallback(name: string, callback: (name: string, payload: string) => string): void;
+    unregisterCallback(name: string): void;
     close(): void;
 }
 
@@ -162,6 +163,10 @@ export class WasmChannel implements RpcChannel {
 
     registerCallback(name: string, callback: (name: string, payload: string) => string): void {
         this.callbacks.set(name, callback);
+    }
+
+    unregisterCallback(name: string): void {
+        this.callbacks.delete(name);
     }
 
     requestSync(method: string, payload: string): string {

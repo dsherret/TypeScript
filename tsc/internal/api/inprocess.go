@@ -86,7 +86,7 @@ func NewInProcessServer(ctx context.Context, options *InProcessServerOptions) *I
 		},
 	})
 
-	session := NewSession(projectSession, &SessionOptions{
+	session := NewLSPSession(projectSession, &SessionOptions{
 		UseBinaryResponses: true,
 	})
 

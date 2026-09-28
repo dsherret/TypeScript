@@ -10,7 +10,6 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/astnav"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
 	"github.com/microsoft/TypeScript/tsc/internal/format"
-	"github.com/microsoft/TypeScript/tsc/internal/ls/lsconv"
 	"github.com/microsoft/TypeScript/tsc/internal/ls/lsutil"
 	"github.com/microsoft/TypeScript/tsc/internal/lsp/lsproto"
 	"github.com/microsoft/TypeScript/tsc/internal/scanner"
@@ -60,7 +59,7 @@ func (l *LanguageService) FormatDocumentRangeWithSettings(
 		return nil
 	}
 	_, file := l.getProgramAndFile(documentURI)
-	return l.toLSProtoTextEdits(file, l.getFormattingEditsForRange(ctx, file, options, lsconv.FromLSPRangeToOriginal(l.converters, file, r)))
+	return l.toLSProtoTextEdits(file, l.getFormattingEditsForRange(ctx, file, options, l.converters.FromLSPRangeToOriginal(file, r)))
 }
 
 func (l *LanguageService) ProvideFormatDocument(
@@ -192,10 +191,10 @@ func (l *LanguageService) ProvideFormatDocumentRange(
 	_, file := l.getProgramAndFile(documentURI)
 	formatOpts := lsutil.FromLSFormatOptions(l.FormatOptions(), options)
 	if file.ContentMapper() != "" {
-		edits := l.getFormattingEditsForMappedRange(ctx, file, formatOpts, lsconv.FromLSPRangeToOriginal(l.converters, file, r))
+		edits := l.getFormattingEditsForMappedRange(ctx, file, formatOpts, l.converters.FromLSPRangeToOriginal(file, r))
 		return lsproto.TextEditsOrNull{TextEdits: &edits}, nil
 	}
-	ranges := lsconv.FromLSPRangeForSourceFile(l.converters, file, r, spanmap.FeatureFormatting)
+	ranges := l.converters.FromLSPRangeForSourceFile(file, r, spanmap.FeatureFormatting)
 	if len(ranges) != 1 || !ranges[0].Fidelity.IsExact() {
 		return lsproto.TextEditsOrNull{}, nil
 	}
@@ -221,7 +220,7 @@ func (l *LanguageService) ProvideFormatDocumentOnType(
 	}
 	_, file := l.getProgramAndFile(documentURI)
 	formatOpts := lsutil.FromLSFormatOptions(l.FormatOptions(), options)
-	positions := lsconv.FromLSPPositionForSourceFile(l.converters, file, position, spanmap.FeatureFormatting)
+	positions := l.converters.FromLSPPositionForSourceFile(file, position, spanmap.FeatureFormatting)
 	if len(positions) != 1 || !positions[0].Fidelity.IsExact() {
 		return lsproto.TextEditsOrNull{}, nil
 	}

@@ -87,7 +87,6 @@ func parseConfigForTest(t *testing.T, configText string, otherFiles map[string]s
 		nil, /*existingOptionsRaw*/
 		configFileName,
 		nil, /*resolutionStack*/
-		nil, /*extraFileExtensions*/
 		nil, /*extendedConfigCache*/
 	)
 }

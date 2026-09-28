@@ -137,7 +137,7 @@ func (t *parseTask) load(loader *fileLoader) {
 	t.subTasks = make([]*parseTask, 0, len(file.ReferencedFiles)+len(file.Imports())+len(file.ModuleAugmentations))
 
 	compilerOptions := loader.opts.Config.CompilerOptions()
-	if !compilerOptions.NoResolve.IsTrue() {
+	if !compilerOptions.NoResolve.IsTrue() && !loader.opts.SkipModuleResolution {
 		for index, ref := range file.ReferencedFiles {
 			resolvedRef, processingDiagnostic := loader.resolveTripleslashPathReference(ref.FileName, file.FileName(), index)
 			if processingDiagnostic != nil {
@@ -150,7 +150,7 @@ func (t *parseTask) load(loader *fileLoader) {
 		loader.resolveTypeReferenceDirectives(t)
 	}
 
-	if compilerOptions.NoLib != core.TSTrue {
+	if compilerOptions.NoLib != core.TSTrue && !loader.opts.SkipModuleResolution {
 		for index, lib := range file.LibReferenceDirectives {
 			includeReason := &FileIncludeReason{
 				kind: fileIncludeKindLibReferenceDirective,
@@ -731,9 +731,10 @@ func (w *filesParser) getProcessedFiles(loader *fileLoader) processedFiles {
 		redirectFilesByPath:                  redirectFilesByPath,
 		contentMapperDiagnostics:             loader.contentMapperDiagnostics,
 
-		libFileCount:         libFileTotal,
-		rootFilesEnd:         rootFilesEnd,
-		filesByLowerCasePath: filesByLowerCasePath,
+		libFileCount:          libFileTotal,
+		rootFilesEnd:          rootFilesEnd,
+		filesByLowerCasePath:  filesByLowerCasePath,
+		moduleResolutionError: loader.moduleResolutionError,
 	}
 }
 

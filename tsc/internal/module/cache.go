@@ -1,8 +1,6 @@
 package module
 
 import (
-	"sync"
-
 	"github.com/microsoft/TypeScript/tsc/internal/collections"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
 	"github.com/microsoft/TypeScript/tsc/internal/packagejson"
@@ -49,6 +47,18 @@ func (c *typeRefDirectiveResolutionCache) Set(key typeRefDirectiveResolutionCach
 	c.cache.Store(key, value)
 }
 
+type parsedPatternsCache struct {
+	cache collections.SyncMap[*collections.OrderedMap[string, []string], *ParsedPatterns]
+}
+
+func (c *parsedPatternsCache) Get(pathMappings *collections.OrderedMap[string, []string]) *ParsedPatterns {
+	patterns, ok := c.cache.Load(pathMappings)
+	if !ok {
+		patterns, _ = c.cache.LoadOrStore(pathMappings, TryParsePatterns(pathMappings))
+	}
+	return patterns
+}
+
 type caches struct {
 	packageJsonInfoCache *packagejson.InfoCache
 	// packageScopeCache memoizes getPackageScopeForPath, which is asked once per
@@ -64,10 +74,10 @@ type caches struct {
 	moduleResolutionCache           moduleResolutionCache
 	typeRefDirectiveResolutionCache typeRefDirectiveResolutionCache
 
-	// Cached representation for `core.CompilerOptions.paths`.
-	// Doesn't handle other path patterns like in `typesVersions`.
-	parsedPatternsForPathsOnce sync.Once
-	parsedPatternsForPaths     *ParsedPatterns
+	// Cached representations for `core.CompilerOptions.paths`, keyed by the
+	// path mappings themselves. This does not handle other path patterns such
+	// as `typesVersions`.
+	parsedPatternsForPaths parsedPatternsCache
 }
 
 func newCaches(

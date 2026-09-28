@@ -350,6 +350,7 @@ type typeRenderer struct {
 	seen               map[*types.TypeName]bool
 	names              map[string]*types.TypeName
 	imports            map[string][]string
+	typeImports        map[string][]string
 	docs               map[types.Object]string
 	packages           map[string]*packages.Package
 	documentIdentifier *types.TypeName
@@ -361,6 +362,7 @@ func newTypeRenderer(apiPackage *packages.Package) *typeRenderer {
 		seen:           make(map[*types.TypeName]bool),
 		names:          make(map[string]*types.TypeName),
 		imports:        make(map[string][]string),
+		typeImports:    make(map[string][]string),
 		docs:           make(map[types.Object]string),
 		packages:       make(map[string]*packages.Package),
 	}
@@ -484,12 +486,30 @@ func basicType(t *types.Basic) string {
 
 func (r *typeRenderer) namedType(named *types.Named) string {
 	obj := named.Obj()
+	if obj.Name() == "error" && obj.Pkg() == nil {
+		return "string"
+	}
 	qualifiedName := obj.Pkg().Path() + "." + obj.Name()
 	switch qualifiedName {
 	case r.apiPackagePath + ".DocumentIdentifier":
 		r.documentIdentifier = obj
 		return "DocumentIdentifier"
+	case r.apiPackagePath + ".ResolutionMode":
+		return "ResolutionMode"
+	case r.apiPackagePath + ".EnsurePrograms":
+		return "EnsurePrograms"
+	case "github.com/microsoft/TypeScript/tsc/internal/project.ID":
+		r.importTypeOnly("Path", "../ast/index.ts")
+		return "ProjectId"
+	case "github.com/microsoft/TypeScript/tsc/internal/project.SyntheticProjectID":
+		return "SyntheticProjectId"
 	case "github.com/microsoft/TypeScript/tsc/internal/packagejson.JSONValue":
+		return "unknown"
+	case "github.com/microsoft/TypeScript/tsc/internal/json.Value":
+		return "unknown"
+	case "github.com/go-json-experiment/json/jsontext.Value": // multiple ways to refer to this type depending on `go` version
+		return "unknown"
+	case "encoding/json/jsontext.Value":
 		return "unknown"
 	case "github.com/microsoft/TypeScript/tsc/internal/core.Tristate":
 		return "boolean"
@@ -505,6 +525,8 @@ func (r *typeRenderer) namedType(named *types.Named) string {
 		return r.importType("NewLineKind", "#enums/newLineKind")
 	case "github.com/microsoft/TypeScript/tsc/internal/core.ScriptTarget":
 		return r.importType("ScriptTarget", "#enums/scriptTarget")
+	case "github.com/microsoft/TypeScript/tsc/internal/core.ScriptKind":
+		return r.importType("ScriptKind", "#enums/scriptKind")
 	case "github.com/microsoft/TypeScript/tsc/internal/collections.OrderedMap":
 		if named.TypeArgs().Len() != 2 {
 			return "Record<string, unknown>"
@@ -561,6 +583,9 @@ func (r *typeRenderer) inlineStruct(structType *types.Struct) string {
 			continue
 		}
 		fieldType := r.typeString(structType.Field(i).Type(), !optional && !nonnil)
+		if optional {
+			fieldType += " | undefined"
+		}
 		doc := r.docs[structType.Field(i)]
 		multiline = multiline || doc != ""
 		fields = append(fields, fmt.Sprintf("%s%s%s: %s", inlineDoc(doc), propertyName(field), optionalMarker(optional), fieldType))
@@ -634,6 +659,12 @@ func (r *typeRenderer) declarations() (string, error) {
 		writeDoc(&out, "", r.docs[r.documentIdentifier])
 		out.WriteString("export type DocumentIdentifier = string | { uri: string; };\n\n")
 	}
+	out.WriteString("export type ResolutionMode = ModuleKind.None | ModuleKind.CommonJS | ModuleKind.ESNext;\n\n")
+	out.WriteString("export type EnsurePrograms = true | readonly ProjectId[];\n\n")
+	out.WriteString("export type InferredProjectId = string & { __inferredProjectIdBrand: any; };\n")
+	out.WriteString("export type ConfiguredProjectId = Path & { __configuredProjectIdBrand: any; };\n")
+	out.WriteString("export type SyntheticProjectId = string & { __syntheticProjectIdBrand: any; };\n")
+	out.WriteString("export type ProjectId = InferredProjectId | ConfiguredProjectId | SyntheticProjectId;\n\n")
 	for len(r.queued) > 0 {
 		named := r.queued[0]
 		r.queued = r.queued[1:]
@@ -653,6 +684,9 @@ func (r *typeRenderer) declarations() (string, error) {
 			fieldType := r.typeString(structType.Field(i).Type(), !optional && !nonnil)
 			if isParams && isArrayType(structType.Field(i).Type()) {
 				fieldType = "readonly " + fieldType
+			}
+			if optional {
+				fieldType += " | undefined"
 			}
 			writeDoc(&out, "    ", r.docs[structType.Field(i)])
 			fmt.Fprintf(&out, "    %s%s: %s;\n", propertyName(field), optionalMarker(optional), fieldType)
@@ -694,6 +728,16 @@ func jsDocLine(line string) string {
 
 func (r *typeRenderer) importDeclarations() string {
 	var out bytes.Buffer
+	typePaths := make([]string, 0, len(r.typeImports))
+	for path := range r.typeImports {
+		typePaths = append(typePaths, path)
+	}
+	sort.Strings(typePaths)
+	for _, path := range typePaths {
+		names := r.typeImports[path]
+		sort.Strings(names)
+		fmt.Fprintf(&out, "import type { %s } from %q;\n", strings.Join(names, ", "), path)
+	}
 	paths := make([]string, 0, len(r.imports))
 	for path := range r.imports {
 		paths = append(paths, path)
@@ -702,9 +746,20 @@ func (r *typeRenderer) importDeclarations() string {
 	for _, path := range paths {
 		names := r.imports[path]
 		sort.Strings(names)
-		fmt.Fprintf(&out, "import type { %s } from %q;\n", strings.Join(names, ", "), path)
+		fmt.Fprintf(&out, "import { %s } from %q;\n", strings.Join(names, ", "), path)
+	}
+	out.WriteString("\n")
+	for _, path := range paths {
+		fmt.Fprintf(&out, "export { %s } from %q;\n", strings.Join(r.imports[path], ", "), path)
 	}
 	return out.String()
+}
+
+func (r *typeRenderer) importTypeOnly(name string, path string) string {
+	if !slices.Contains(r.typeImports[path], name) {
+		r.typeImports[path] = append(r.typeImports[path], name)
+	}
+	return name
 }
 
 func (r *typeRenderer) importType(name string, path string) string {

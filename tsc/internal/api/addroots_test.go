@@ -183,7 +183,7 @@ func TestAddedRootWithADeletedFile(t *testing.T) {
 	session.write("/p/b.ts", `export const b = 2;`)
 	session.roots = append(session.roots, "/p/b.ts")
 	session.writeConfig()
-	session.update(t, &APIFileChanges{
+	session.update(t, &FileNotifications{
 		Created: identifiers("/p/b.ts"),
 		Changed: identifiers(addRootsConfigFileName),
 		Deleted: identifiers("/p/dep.ts"),
@@ -205,6 +205,7 @@ type addRootsSession struct {
 	removedRoots  []string
 	reusedProgram bool
 	lastReasons   map[tspath.Path][]*compiler.FileIncludeReason
+	snapshot      SnapshotID
 }
 
 func newAddRootsSession(t *testing.T, files map[string]string) *addRootsSession {
@@ -245,7 +246,7 @@ func newRootsSession(t *testing.T, files map[string]string, roots []string, viaA
 		DefaultLibraryPath: bundled.LibPath(),
 		PositionEncoding:   lsproto.PositionEncodingKindUTF8,
 	})
-	s.session = NewSession(s.project, nil)
+	s.session = NewLSPSession(s.project, nil)
 	s.update(t, nil)
 	return s
 }
@@ -303,18 +304,21 @@ func (s *addRootsSession) addRoots(t *testing.T, files map[string]string, alsoCh
 		s.writeConfig()
 		changed = append([]string{addRootsConfigFileName}, alsoChanged...)
 	}
-	s.update(t, &APIFileChanges{
+	s.update(t, &FileNotifications{
 		Created: identifiers(created...),
 		Changed: identifiers(changed...),
 	})
 }
 
-func (s *addRootsSession) update(t *testing.T, changes *APIFileChanges) {
+func (s *addRootsSession) update(t *testing.T, changes *FileNotifications) {
 	t.Helper()
 	before := s.lastReasons
-	params := &UpdateSnapshotParams{
-		FileChanges:  changes,
-		OpenProjects: []DocumentIdentifier{{FileName: addRootsConfigFileName}},
+	params := &CreateSnapshotParams{
+		FileNotifications: changes,
+		SnapshotRequestChangesParams: SnapshotRequestChangesParams{
+			OpenProjects:   []DocumentIdentifier{{FileName: addRootsConfigFileName}},
+			EnsurePrograms: &EnsurePrograms{All: true},
+		},
 	}
 	if len(s.pendingRoots) > 0 || len(s.removedRoots) > 0 {
 		params.RootFileChanges = []APIProjectRootFileChanges{{
@@ -325,8 +329,21 @@ func (s *addRootsSession) update(t *testing.T, changes *APIFileChanges) {
 		s.pendingRoots = nil
 		s.removedRoots = nil
 	}
-	_, err := s.session.handleUpdateSnapshot(context.Background(), params)
+	// the first snapshot is created; every later one is derived from it, because the
+	// root files a client names for a project persist across snapshots and an
+	// independent snapshot would start without them
+	var response *CreateSnapshotResponse
+	var err error
+	if s.snapshot == 0 {
+		response, err = s.session.handleCreateSnapshot(context.Background(), params)
+	} else {
+		response, err = s.session.handleUpdateSnapshot(context.Background(), &UpdateSnapshotParams{
+			Snapshot: s.snapshot,
+			Changes:  params,
+		})
+	}
 	assert.NilError(t, err)
+	s.snapshot = response.Snapshot
 	reasons := s.program(t).GetIncludeReasons()
 	// a program that was added to carries the reasons the one before it worked out;
 	// one built again works them all out afresh, so none of the objects are shared
@@ -340,9 +357,17 @@ func (s *addRootsSession) update(t *testing.T, changes *APIFileChanges) {
 	s.lastReasons = reasons
 }
 
+// collection is the project collection of the snapshot the session last built.
+//
+// createSnapshot hands back an independent snapshot rather than adopting it as the
+// project session's current one, so the snapshot has to be named to be read.
+func (s *addRootsSession) collection() *project.ProjectCollection {
+	return s.session.snapshots[s.snapshot].snapshot.ProjectCollection
+}
+
 func (s *addRootsSession) program(t *testing.T) *compiler.Program {
 	t.Helper()
-	configured := s.project.Snapshot().ProjectCollection.ConfiguredProject(tspath.Path(addRootsConfigFileName))
+	configured := s.collection().ConfiguredProject(tspath.Path(addRootsConfigFileName))
 	assert.Assert(t, configured != nil)
 	return configured.GetProgram()
 }

@@ -21,7 +21,6 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/printer"
 	"github.com/microsoft/TypeScript/tsc/internal/scanner"
 	"github.com/microsoft/TypeScript/tsc/internal/spanmap"
-	"github.com/microsoft/TypeScript/tsc/internal/stringutil"
 
 	"github.com/microsoft/TypeScript/tsc/internal/tspath"
 )
@@ -520,10 +519,8 @@ func (l *LanguageService) getNonLocalDefinition(ctx context.Context, entry *Symb
 				continue
 			}
 			return &nonLocalDefinition{
-				position: position{
-					uri: lsconv.FileNameToDocumentURI(fileName),
-					pos: lspPosition,
-				},
+				uri: lsconv.FileNameToDocumentURI(fileName),
+				pos: lspPosition,
 				GetSourcePosition: sync.OnceValue(func() lsproto.HasTextDocumentPosition {
 					mapped := l.tryGetSourcePosition(fileName, startPos)
 					if mapped != nil {
@@ -656,7 +653,7 @@ func (l *LanguageService) provideSymbolsAndEntries(ctx context.Context, uri lspr
 	} else if isRename {
 		feature = spanmap.FeatureRename
 	}
-	positions := lsconv.FromLSPPositionForSourceFile(l.converters, sourceFile, documentPosition, feature)
+	positions := l.converters.FromLSPPositionForSourceFile(sourceFile, documentPosition, feature)
 	if len(positions) == 0 {
 		return SymbolAndEntriesData{}, false
 	}
@@ -758,8 +755,7 @@ func (l *LanguageService) getSymbolAndEntries(
 }
 
 func (l *LanguageService) ProvideReferences(ctx context.Context, params *lsproto.ReferenceParams, orchestrator CrossProjectOrchestrator) (lsproto.ReferencesResponse, error) {
-	return handleCrossProject(
-		l,
+	return l.handleCrossProject(
 		ctx,
 		params,
 		orchestrator,
@@ -773,8 +769,7 @@ func (l *LanguageService) ProvideReferences(ctx context.Context, params *lsproto
 }
 
 func (l *LanguageService) provideReferencesFromData(ctx context.Context, params *lsproto.ReferenceParams, orchestrator CrossProjectOrchestrator, data SymbolAndEntriesData) (lsproto.ReferencesResponse, error) {
-	return handleCrossProject(
-		l,
+	return l.handleCrossProject(
 		ctx,
 		params,
 		orchestrator,
@@ -788,8 +783,7 @@ func (l *LanguageService) provideReferencesFromData(ctx context.Context, params 
 }
 
 func (l *LanguageService) ProvideVSReferences(ctx context.Context, params *lsproto.ReferenceParams, orchestrator CrossProjectOrchestrator) (lsproto.VSReferencesResponse, error) {
-	return handleCrossProject(
-		l,
+	return l.handleCrossProject(
 		ctx,
 		params,
 		orchestrator,
@@ -818,7 +812,7 @@ func (l *LanguageService) symbolAndEntriesToVSReferences(ctx context.Context, pa
 	vsCapability := caps.VSSupportsVisualStudioExtensions
 	var items []*lsproto.VSReferenceItem
 	id := int32(0)
-	projectName := string(l.projectPath)
+	projectName := l.projectID.String()
 
 	for _, s := range data.SymbolsAndEntries {
 		if s.definition == nil {
@@ -1052,8 +1046,7 @@ func (l *LanguageService) ProvideImplementations(ctx context.Context, params *ls
 }
 
 func (l *LanguageService) provideImplementationsEx(ctx context.Context, params *lsproto.ImplementationParams, options symbolEntryTransformOptions, orchestrator CrossProjectOrchestrator) (lsproto.ImplementationResponse, error) {
-	return handleCrossProject(
-		l,
+	return l.handleCrossProject(
 		ctx,
 		params,
 		orchestrator,
@@ -1067,8 +1060,7 @@ func (l *LanguageService) provideImplementationsEx(ctx context.Context, params *
 }
 
 func (l *LanguageService) provideImplementationsFromData(ctx context.Context, params *lsproto.ImplementationParams, options symbolEntryTransformOptions, orchestrator CrossProjectOrchestrator, data SymbolAndEntriesData) (lsproto.ImplementationResponse, error) {
-	return handleCrossProject(
-		l,
+	return l.handleCrossProject(
 		ctx,
 		params,
 		orchestrator,
@@ -2003,7 +1995,12 @@ func (state *refState) createSearch(location *ast.Node, symbol *ast.Symbol, comi
 				s = symbol
 			}
 		}
-		text = stringutil.StripQuotes(ast.SymbolName(s))
+		symbolName := ast.SymbolName(s)
+		if moduleName, ok := ast.TryGetAmbientModuleNameFromSymbolName(symbolName); ok {
+			text = moduleName
+		} else {
+			text = symbolName
+		}
 	}
 	if len(allSearchSymbols) == 0 {
 		allSearchSymbols = []*ast.Symbol{symbol}

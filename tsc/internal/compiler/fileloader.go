@@ -46,7 +46,7 @@ type sourceFileFromReferenceDiagnostic struct {
 
 type fileLoader struct {
 	opts                                           ProgramOptions
-	resolver                                       *module.Resolver
+	resolver                                       module.Resolver
 	defaultLibraryPath                             string
 	comparePathsOptions                            tspath.ComparePathsOptions
 	supportedExtensions                            [][]string
@@ -94,10 +94,12 @@ type fileLoader struct {
 
 	// contentMapperMu guards the content-mapper bookkeeping below, which is written concurrently as
 	// content-mapped files are parsed across worker goroutines.
-	contentMapperMu          sync.Mutex
-	contentMapperFailures    map[*contentmapper.Mapper]int
-	contentMapperInitFailed  collections.Set[*contentmapper.Mapper]
-	contentMapperDiagnostics []*ast.Diagnostic
+	contentMapperMu           sync.Mutex
+	contentMapperFailures     map[*contentmapper.Mapper]int
+	contentMapperInitFailed   collections.Set[*contentmapper.Mapper]
+	contentMapperDiagnostics  []*ast.Diagnostic
+	moduleResolutionErrorOnce sync.Once
+	moduleResolutionError     error
 }
 
 type redirectsFile struct {
@@ -133,7 +135,7 @@ func (r *redirectsFile) Path() tspath.Path {
 }
 
 type processedFiles struct {
-	resolver *module.Resolver
+	resolver module.Resolver
 	files    []*ast.SourceFile
 	// duplicateSourceFiles tracks parsed files loaded during program construction
 	// that were later dropped from the final program, such as losing filename
@@ -162,6 +164,7 @@ type processedFiles struct {
 	redirectFilesByPath map[tspath.Path]*redirectsFile
 	// Program-level diagnostics reported when a content mapper fails fatally (reported once per mapper).
 	contentMapperDiagnostics []*ast.Diagnostic
+	moduleResolutionError    error
 	finishedProcessing       bool
 
 	// libFileCount is how many of files are lib files. The parser puts them first.
@@ -221,7 +224,18 @@ func processRootFileChanges(
 	}
 	loader.filesParser.incremental = true
 	loader.addProjectReferenceTasks(singleThreaded)
-	loader.resolver = module.NewResolver(loader.projectReferenceFileMapper.host, opts.Config.CompilerOptions(), opts.TypingsLocation, opts.ProjectName, opts.Config.ContentMapperExtensions())
+	resolverOptions := module.ResolverOptions{
+		Host:            loader.projectReferenceFileMapper.host,
+		CompilerOptions: opts.Config.CompilerOptions(),
+		TypingsLocation: opts.TypingsLocation,
+		ProjectName:     opts.ProjectName,
+		ExtraExtensions: opts.Config.ContentMapperExtensions(),
+	}
+	if opts.CreateModuleResolver != nil {
+		loader.resolver = opts.CreateModuleResolver(resolverOptions)
+	} else {
+		loader.resolver = module.NewResolver(resolverOptions)
+	}
 	for _, rootFile := range addedRootFiles {
 		loader.addRootFileTask(rootFile, nil, &FileIncludeReason{kind: fileIncludeKindRootFile, data: rootFile})
 	}
@@ -360,7 +374,18 @@ func processAllProgramFiles(
 	rootFiles := opts.Config.FileNames()
 	loader := newFileLoader(opts, len(rootFiles)+len(compilerOptions.Lib), singleThreaded)
 	loader.addProjectReferenceTasks(singleThreaded)
-	loader.resolver = module.NewResolver(loader.projectReferenceFileMapper.host, compilerOptions, opts.TypingsLocation, opts.ProjectName, opts.Config.ContentMapperExtensions())
+	resolverOptions := module.ResolverOptions{
+		Host:            loader.projectReferenceFileMapper.host,
+		CompilerOptions: compilerOptions,
+		TypingsLocation: opts.TypingsLocation,
+		ProjectName:     opts.ProjectName,
+		ExtraExtensions: opts.Config.ContentMapperExtensions(),
+	}
+	if opts.CreateModuleResolver != nil {
+		loader.resolver = opts.CreateModuleResolver(resolverOptions)
+	} else {
+		loader.resolver = module.NewResolver(resolverOptions)
+	}
 	if opts.Tracing != nil {
 		defer opts.Tracing.Push(tracing.PhaseProgram, "processRootFiles", map[string]any{"count": len(rootFiles)}, false)()
 	}
@@ -384,7 +409,7 @@ func processAllProgramFiles(
 		}
 	}
 
-	if len(rootFiles) > 0 {
+	if len(rootFiles) > 0 && !opts.SkipModuleResolution {
 		loader.addAutomaticTypeDirectiveTasks()
 	}
 
@@ -584,7 +609,7 @@ func (p *fileLoader) getDefaultLibFilePriority(a *ast.SourceFile) int {
 }
 
 func (p *fileLoader) loadSourceFileMetaData(fileName string) ast.SourceFileMetaData {
-	return sourceFileMetaData(fileName, p.resolver, p.opts.Config.CompilerOptions())
+	return sourceFileMetaData(fileName, p.resolver, p.opts.Config.CompilerOptions(), p.opts.SkipModuleResolution)
 }
 
 // sourceFileMetaData is what a file's package scope says about it — the `type` of the
@@ -594,7 +619,15 @@ func (p *fileLoader) loadSourceFileMetaData(fileName string) ast.SourceFileMetaD
 // It is a function rather than a method because it is asked twice: as a file is loaded,
 // and about a file that has not been loaded, where the answer decides what parse options
 // the file would get if it were. See Program.SourceFileMetaDataFor.
-func sourceFileMetaData(fileName string, resolver *module.Resolver, compilerOptions *core.CompilerOptions) ast.SourceFileMetaData {
+func sourceFileMetaData(fileName string, resolver module.Resolver, compilerOptions *core.CompilerOptions, skipModuleResolution bool) ast.SourceFileMetaData {
+	// With resolution skipped there is no package scope to consult, so the format is
+	// whatever the file's own extension implies.
+	if skipModuleResolution {
+		return ast.SourceFileMetaData{
+			ImpliedNodeFormat: ast.GetImpliedNodeFormatForFile(fileName, ""),
+		}
+	}
+
 	packageJsonScope := resolver.GetPackageScopeForPath(tspath.GetDirectoryPath(fileName))
 	moduleResolutionKind := compilerOptions.GetModuleResolutionKind()
 
@@ -1104,6 +1137,10 @@ func (p *fileLoader) resolveImportsAndModuleAugmentations(t *parseTask) {
 		// Do nothing if it's an Identifier; we don't need to do module resolution for `declare global`.
 	}
 
+	if p.opts.SkipModuleResolution {
+		return
+	}
+
 	if len(moduleNames) != 0 {
 		resolutionsInFile := make(module.ModeAwareCache[*module.ResolvedModule], len(moduleNames))
 		var resolutionsTrace []module.DiagAndArgs
@@ -1115,7 +1152,18 @@ func (p *fileLoader) resolveImportsAndModuleAugmentations(t *parseTask) {
 			}
 
 			mode := getModeForUsageLocation(file.FileName(), meta, entry, optionsForFile)
-			resolvedModule, trace := p.resolver.ResolveModuleName(moduleName, fileName, mode, redirect)
+			var resolvedModule *module.ResolvedModule
+			var trace []module.DiagAndArgs
+			var err error
+			resolvedModule, trace, err = p.resolver.ResolveModuleName(moduleName, fileName, mode, redirect)
+			if err != nil {
+				p.moduleResolutionErrorOnce.Do(func() {
+					p.moduleResolutionError = err
+				})
+			}
+			if resolvedModule == nil {
+				resolvedModule = &module.ResolvedModule{}
+			}
 			resolutionsInFile[module.ModeAwareCacheKey{Name: moduleName, Mode: mode}] = resolvedModule
 			resolutionsTrace = append(resolutionsTrace, trace...)
 
@@ -1183,7 +1231,7 @@ func (p *fileLoader) pathForLibFile(name string) *LibFile {
 
 	path := tspath.CombinePaths(p.defaultLibraryPath, name)
 	replaced := false
-	if p.opts.Config.CompilerOptions().LibReplacement.IsTrue() && name != "lib.d.ts" {
+	if !p.opts.SkipModuleResolution && p.opts.Config.CompilerOptions().LibReplacement.IsTrue() && name != "lib.d.ts" {
 		libraryName := getLibraryNameFromLibFileName(name)
 		resolveFrom := getInferredLibraryNameResolveFrom(p.opts.Config.CompilerOptions(), p.opts.Host.GetCurrentDirectory(), name)
 		resolution, trace := p.resolveLibrary(libraryName, resolveFrom)
@@ -1206,7 +1254,13 @@ func (p *fileLoader) resolveLibrary(libraryName, resolveFrom string) (*module.Re
 	if tr := p.opts.Tracing; tr != nil {
 		defer tr.Push(tracing.PhaseProgram, "resolveLibrary", map[string]any{"resolveFrom": resolveFrom}, false)()
 	}
-	return p.resolver.ResolveModuleName(libraryName, resolveFrom, core.ModuleKindCommonJS, nil)
+	resolved, trace, err := p.resolver.ResolveModuleName(libraryName, resolveFrom, core.ModuleKindCommonJS, nil)
+	if err != nil {
+		p.moduleResolutionErrorOnce.Do(func() {
+			p.moduleResolutionError = err
+		})
+	}
+	return resolved, trace
 }
 
 func getLibraryNameFromLibFileName(libFileName string) string {
@@ -1266,11 +1320,11 @@ func getModeForUsageLocation(fileName string, meta ast.SourceFileMetaData, usage
 			var ok bool
 			switch usage.Parent.Kind {
 			case ast.KindImportDeclaration, ast.KindJSImportDeclaration:
-				override, ok = usage.Parent.AsImportDeclaration().Attributes.GetResolutionModeOverride()
+				override, ok = usage.Parent.AsImportDeclaration().Attributes.GetResolutionModeOverride(nil)
 			case ast.KindExportDeclaration:
-				override, ok = usage.Parent.AsExportDeclaration().Attributes.GetResolutionModeOverride()
+				override, ok = usage.Parent.AsExportDeclaration().Attributes.GetResolutionModeOverride(nil)
 			case ast.KindJSDocImportTag:
-				override, ok = usage.Parent.AsJSDocImportTag().Attributes.GetResolutionModeOverride()
+				override, ok = usage.Parent.AsJSDocImportTag().Attributes.GetResolutionModeOverride(nil)
 			}
 			if ok {
 				return override
@@ -1278,7 +1332,7 @@ func getModeForUsageLocation(fileName string, meta ast.SourceFileMetaData, usage
 		}
 	}
 	if ast.IsLiteralTypeNode(usage.Parent) && ast.IsImportTypeNode(usage.Parent.Parent) {
-		if override, ok := usage.Parent.Parent.AsImportTypeNode().Attributes.GetResolutionModeOverride(); ok {
+		if override, ok := usage.Parent.Parent.AsImportTypeNode().Attributes.GetResolutionModeOverride(nil); ok {
 			return override
 		}
 	}

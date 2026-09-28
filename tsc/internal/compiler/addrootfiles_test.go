@@ -375,7 +375,7 @@ func newTestHost(files map[string]string) CompilerHost {
 }
 
 func newTestConfig(options *core.CompilerOptions, roots []string) *tsoptions.ParsedCommandLine {
-	return tsoptions.NewParsedCommandLine(options, roots, tspath.ComparePathsOptions{
+	return tsoptions.NewParsedCommandLine(options, roots, nil /*projectReferences*/, tspath.ComparePathsOptions{
 		UseCaseSensitiveFileNames: true,
 		CurrentDirectory:          "/p",
 	})

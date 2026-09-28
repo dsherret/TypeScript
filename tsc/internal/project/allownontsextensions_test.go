@@ -48,7 +48,7 @@ func TestAllowNonTsExtensionsIsForcedOnConfiguredProjects(t *testing.T) {
 			openProjects.Add(configFile)
 			snapshot, err := session.APIUpdate(context.Background(), FileChangeSummary{}, &APISnapshotRequest{OpenProjects: openProjects})
 			assert.NilError(t, err)
-			defer snapshot.Deref(session)
+			defer snapshot.Deref()
 
 			project := snapshot.ProjectCollection.ConfiguredProject(tspath.Path(configFile))
 			assert.Assert(t, project != nil)
