@@ -86,7 +86,6 @@ func TestAPIRootsProjectLevelRemoval(t *testing.T) {
 // in what the program says.
 func TestAPIRootsProjectLevelRolling(t *testing.T) {
 	t.Parallel()
-	t.Skip("the incremental root-file path is not taken after the rebase onto TypeScript main - see tsgo-wasm/TODO.md 2.5")
 	if !bundled.Embedded {
 		t.Skip("bundled files are not embedded")
 	}

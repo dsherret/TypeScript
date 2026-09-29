@@ -209,7 +209,13 @@ func (b *ProjectCollectionBuilder) HandleAPIRequest(apiRequest *APISnapshotReque
 				b.apiState.openProjects[configPath]++
 				// A project re-opened in the same request shouldn't be closed.
 				delete(projectsToClose, configPath)
-				b.updateProgram(entry, logger)
+				// not when the same request names root files for it: those are applied below,
+				// and a build here would be a build of the roots it had before. It would also
+				// be the build that consumed any pending file change, leaving the one after
+				// the roots nothing it could derive a program from.
+				if apiRequest.RootFiles[configPath] == nil {
+					b.updateProgram(entry, logger)
+				}
 			} else {
 				return fmt.Errorf("project not found for open: %s", configFileName)
 			}
