@@ -574,19 +574,40 @@ func (r *typeRenderer) stringLiterals(named *types.Named) []string {
 	return literals
 }
 
+// deprecatedFieldsKeptInAPI names the deprecated compiler options the API still carries,
+// and what to say about each in place of the Go comment's "do not use".
+//
+// TypeScript 7 removed only the `false` value of these three, so `true` is the only
+// meaning left and `esModuleInterop` defaults to it. A client that writes one is writing
+// something the compiler still accepts, and leaving them out of the interface makes
+// correct code a compile error. The three that are genuinely gone - baseUrl,
+// downlevelIteration and outFile - stay out.
+var deprecatedFieldsKeptInAPI = map[string]string{
+	"AllowSyntheticDefaultImports": "Deprecated: TypeScript 7 removed the `false` value, so `true` is the only meaning left.",
+	"AlwaysStrict":                 "Deprecated: TypeScript 7 removed the `false` value, so `true` is the only meaning left.",
+	"ESModuleInterop":              "Deprecated: TypeScript 7 removed the `false` value, so `true` is the default and the only meaning left.",
+}
+
 func (r *typeRenderer) inlineStruct(structType *types.Struct) string {
 	var fields []string
 	multiline := false
 	for i := range structType.NumFields() {
 		field, include, optional, nonnil, deprecated, internal := jsonField(structType, i)
-		if !include || deprecated || internal {
+		if !include || internal {
 			continue
+		}
+		doc := r.docs[structType.Field(i)]
+		if deprecated {
+			kept, ok := deprecatedFieldsKeptInAPI[structType.Field(i).Name()]
+			if !ok {
+				continue
+			}
+			doc = kept
 		}
 		fieldType := r.typeString(structType.Field(i).Type(), !optional && !nonnil)
 		if optional {
 			fieldType += " | undefined"
 		}
-		doc := r.docs[structType.Field(i)]
 		multiline = multiline || doc != ""
 		fields = append(fields, fmt.Sprintf("%s%s%s: %s", inlineDoc(doc), propertyName(field), optionalMarker(optional), fieldType))
 	}
@@ -678,8 +699,16 @@ func (r *typeRenderer) declarations() (string, error) {
 		}
 		for i := range structType.NumFields() {
 			field, include, optional, nonnil, deprecated, internal := jsonField(structType, i)
-			if !include || deprecated || internal {
+			if !include || internal {
 				continue
+			}
+			doc := r.docs[structType.Field(i)]
+			if deprecated {
+				kept, ok := deprecatedFieldsKeptInAPI[structType.Field(i).Name()]
+				if !ok {
+					continue
+				}
+				doc = kept
 			}
 			fieldType := r.typeString(structType.Field(i).Type(), !optional && !nonnil)
 			if isParams && isArrayType(structType.Field(i).Type()) {
@@ -688,7 +717,7 @@ func (r *typeRenderer) declarations() (string, error) {
 			if optional {
 				fieldType += " | undefined"
 			}
-			writeDoc(&out, "    ", r.docs[structType.Field(i)])
+			writeDoc(&out, "    ", doc)
 			fmt.Fprintf(&out, "    %s%s: %s;\n", propertyName(field), optionalMarker(optional), fieldType)
 		}
 		out.WriteString("}\n\n")
