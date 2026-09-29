@@ -19,40 +19,6 @@
 //     }
 // }
 
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
-
 
 
 // === findRenameLocations ===
@@ -75,40 +41,6 @@
 //         if ("[|aRENAME|]" != this.p) {}
 //     }
 // }
-
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
 
 
 
@@ -133,40 +65,6 @@
 //     }
 // }
 
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
-
 
 
 // === findRenameLocations ===
@@ -189,40 +87,6 @@
 //         if ("[|aRENAME|]" != this.p) {}
 //     }
 // }
-
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
 
 
 
@@ -247,40 +111,6 @@
 //     }
 // }
 
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
-
 
 
 // === findRenameLocations ===
@@ -303,40 +133,6 @@
 //         if ("[|aRENAME|]" != this.p) {}
 //     }
 // }
-
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
 
 
 
@@ -361,40 +157,6 @@
 //     }
 // }
 
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
-
 
 
 // === findRenameLocations ===
@@ -417,40 +179,6 @@
 //         if ("[|aRENAME|]" != this.p) {}
 //     }
 // }
-
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
 
 
 
@@ -475,40 +203,6 @@
 //     }
 // }
 
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
-
 
 
 // === findRenameLocations ===
@@ -531,37 +225,3 @@
 //         if ("/*RENAME*/[|aRENAME|]" != this.p) {}
 //     }
 // }
-
-// === bundled:///libs/lib.dom.d.ts ===
-// --- (line: --) skipped ---
-// }
-// 
-// interface HTMLElementTagNameMap {
-//     "[|aRENAME|]": HTMLAnchorElement;
-//     "abbr": HTMLElement;
-//     "address": HTMLElement;
-//     "area": HTMLAreaElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface SVGElementTagNameMap {
-//     "[|aRENAME|]": SVGAElement;
-//     "animate": SVGAnimateElement;
-//     "animateMotion": SVGAnimateMotionElement;
-//     "animateTransform": SVGAnimateTransformElement;
-// --- (line: --) skipped ---
-// 
-
-// --- (line: --) skipped ---
-// }
-// 
-// interface MathMLElementTagNameMap {
-//     "[|aRENAME|]": MathMLElement;
-//     "annotation": MathMLElement;
-//     "annotation-xml": MathMLElement;
-//     "maction": MathMLElement;
-// --- (line: --) skipped ---
-// 
